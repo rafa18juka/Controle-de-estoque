@@ -1,148 +1,181 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 
 import { BrowserMultiFormatReader, listVideoInputDevices } from "@zxing/browser";
-import { Button } from "@/components/ui/button";
 
-const SECURE_CONTEXT_MESSAGE = "O leitor de codigo de barras requer HTTPS ou localhost para acessar a camera.";
+const SECURE_CONTEXT_MESSAGE = "Use HTTPS ou localhost para liberar o acesso a camera.";
+
+type ScannerStatus = "idle" | "initializing" | "ready" | "error";
 
 interface BarcodeScannerProps {
   onResult: (value: string) => void;
-  paused?: boolean;
+  active: boolean;
+  deviceId: string | null;
+  onDevicesChange?: (devices: MediaDeviceInfo[]) => void;
+  onSecureContextChange?: (secure: boolean) => void;
+  onStatusChange?: (status: ScannerStatus) => void;
+  onError?: (message: string | null) => void;
+  className?: string;
 }
 
-export function BarcodeScanner({ onResult, paused = false }: BarcodeScannerProps) {
+export function BarcodeScanner({
+  onResult,
+  active,
+  deviceId,
+  onDevicesChange,
+  onSecureContextChange,
+  onStatusChange,
+  onError,
+  className
+}: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
-  const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
+  const lastResultRef = useRef<{ value: string; timestamp: number } | null>(null);
   const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [secureContext, setSecureContext] = useState(true);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const secure = window.isSecureContext;
+    setSecureContext(secure);
+    onSecureContextChange?.(secure);
+
+    if (!secure) {
+      setLocalError(SECURE_CONTEXT_MESSAGE);
+      onError?.(SECURE_CONTEXT_MESSAGE);
+      onDevicesChange?.([]);
+      onStatusChange?.("idle");
+      return;
+    }
+
+    setLocalError(null);
+    onError?.(null);
+
     let cancelled = false;
 
-    const prepare = async () => {
-      if (typeof window === "undefined") {
-        return;
-      }
-
-      if (!window.isSecureContext) {
-        setSecureContext(false);
-        setReady(false);
-        setCameras([]);
-        setActiveDeviceId(null);
-        const message = SECURE_CONTEXT_MESSAGE;
-        setError(message);
-        if (!cancelled) {
-          toast.warning(message);
-        }
-        return;
-      }
-
-      setSecureContext(true);
-      setError(null);
-
+    const loadDevices = async () => {
       try {
         const devices = await listVideoInputDevices();
         if (cancelled) return;
-        setCameras(devices);
-        const deviceId = devices[0]?.deviceId ?? null;
-        setActiveDeviceId((prev) => prev ?? deviceId);
-      } catch (err) {
-        console.error(err);
-        const message = "Nao foi possivel listar as cameras disponiveis";
-        setError(message);
-        toast.error(message);
+        onDevicesChange?.(devices);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Nao foi possivel listar as cameras", error);
+        const message = "Nao foi possivel listar as cameras disponiveis.";
+        setLocalError(message);
+        onError?.(message);
+        onStatusChange?.("error");
       }
     };
 
-    prepare();
+    loadDevices();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onDevicesChange, onError, onSecureContextChange, onStatusChange]);
 
   useEffect(() => {
     if (!secureContext) {
-      if (readerRef.current) {
-        readerRef.current.reset();
-        readerRef.current = null;
-      }
+      stopReader();
       return;
     }
 
-    if (!videoRef.current || !activeDeviceId || paused) {
-      if (readerRef.current) {
-        readerRef.current.reset();
-        setReady(false);
-      }
+    if (!active || !videoRef.current || !deviceId) {
+      stopReader();
+      setReady(false);
+      onStatusChange?.("idle");
       return;
     }
 
-    const reader = new BrowserMultiFormatReader({ formats: ["code_128", "ean_13"] });
-    readerRef.current = reader;
+    let cancelled = false;
+    setReady(false);
+    onStatusChange?.("initializing");
+    readerRef.current ??= new BrowserMultiFormatReader();
+    readerRef.current.reset();
 
-    reader
-      .decodeFromVideoDevice(activeDeviceId, videoRef.current, (value) => {
-        if (value) {
-          onResult(value);
+    const videoElement = videoRef.current;
+
+    readerRef.current
+      .decodeFromVideoDevice(deviceId, videoElement, (result: any) => {
+        if (!result) return;
+        const raw = typeof result === "string" ? result : typeof result.getText === "function" ? result.getText() : "";
+        const text = typeof raw === "string" ? raw.trim() : "";
+        if (!text) return;
+        const now = Date.now();
+        const last = lastResultRef.current;
+        if (last && last.value === text && now - last.timestamp < 1000) {
+          return;
         }
+        lastResultRef.current = { value: text, timestamp: now };
+        onResult(text);
       })
-      .then(() => setReady(true))
-      .catch((err) => {
-        console.error("Erro ao iniciar scanner", err);
-        const message = err instanceof Error ? err.message : String(err);
-        setError(message);
-        toast.error("Falha ao iniciar o leitor de codigo de barras");
+      .then(() => {
+        if (cancelled) return;
+        setReady(true);
+        onStatusChange?.("ready");
+        setLocalError(null);
+        onError?.(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Erro ao iniciar o scanner", error);
+        const message = error instanceof Error ? error.message : String(error);
+        setLocalError(message);
+        onError?.(message);
+        onStatusChange?.("error");
       });
 
     return () => {
-      reader.reset();
+      cancelled = true;
+      stopReader();
+      onStatusChange?.("idle");
     };
-  }, [activeDeviceId, onResult, paused, secureContext]);
+  }, [active, deviceId, onResult, onError, onStatusChange, secureContext]);
 
-  const changeCamera = (deviceId: string) => {
-    if (!secureContext || deviceId === activeDeviceId) return;
-    setReady(false);
-    setActiveDeviceId(deviceId);
-  };
+  useEffect(() => {
+    if (!active) {
+      lastResultRef.current = null;
+    }
+  }, [active, deviceId]);
+
+  const statusMessage = !secureContext
+    ? SECURE_CONTEXT_MESSAGE
+    : localError
+      ? localError
+      : ready
+        ? "Camera pronta"
+        : active
+          ? "Iniciando camera..."
+          : "Scanner pausado";
 
   return (
-    <div className="flex flex-col gap-4">
-      {!secureContext ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          Conecte-se via HTTPS (ou use localhost) para liberar a camera.
-        </div>
-      ) : null}
+    <div className={`flex flex-col gap-3 ${className ?? ""}`}>
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-900/70 p-2 shadow-inner">
         <video ref={videoRef} className="aspect-video w-full rounded-lg bg-black object-cover" muted playsInline />
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {cameras.map((camera) => (
-          <Button
-            key={camera.deviceId || camera.label}
-            type="button"
-            variant={camera.deviceId === activeDeviceId ? "default" : "outline"}
-            size="sm"
-            onClick={() => changeCamera(camera.deviceId)}
-            disabled={!secureContext}
-          >
-            {camera.label || "Camera"}
-          </Button>
-        ))}
-        {!cameras.length && secureContext && (
-          <span className="text-sm text-slate-500">Nenhuma camera detectada</span>
-        )}
-        <span className="ml-auto text-sm text-slate-500">
-          {error ? error : ready ? "Camera pronta" : secureContext ? "Preparando camera..." : "Camera bloqueada"}
-        </span>
-      </div>
+      <span className="text-xs text-slate-500">{statusMessage}</span>
     </div>
   );
+
+  function stopReader() {
+    if (readerRef.current) {
+      try {
+        readerRef.current.reset();
+      } catch (error) {
+        console.warn("Falha ao resetar o scanner", error);
+      }
+    }
+    if (videoRef.current) {
+      const stream = videoRef.current.srcObject as MediaStream | null;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        videoRef.current.srcObject = null;
+      }
+    }
+  }
 }
 
