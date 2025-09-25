@@ -39,22 +39,21 @@ class BrowserMultiFormatReader {
     this._stream = null;
   }
 
-  async decodeFromVideoDevice(deviceId, videoElement, callback) {
+  async decodeFromConstraints(constraints, videoElement, callback) {
     if (typeof window === "undefined") {
-      throw new Error("BrowserMultiFormatReader só funciona no cliente");
+      throw new Error("BrowserMultiFormatReader so funciona no cliente");
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) {
+      throw new Error("APIs de media indisponiveis");
     }
     const video =
       typeof videoElement === "string"
         ? document.querySelector(videoElement)
         : videoElement;
     if (!video) {
-      throw new Error("Elemento de vídeo não encontrado");
+      throw new Error("Elemento de video nao encontrado");
     }
     this._video = video;
-    const constraints = { video: { facingMode: "environment" } };
-    if (deviceId) {
-      constraints.video.deviceId = { exact: deviceId };
-    }
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     this._stream = stream;
     video.srcObject = stream;
@@ -82,6 +81,17 @@ class BrowserMultiFormatReader {
 
     tick();
     return this;
+  }
+
+  async decodeFromVideoDevice(deviceId, videoElement, callback) {
+    const constraints = {
+      video: { facingMode: "environment" },
+      audio: false
+    };
+    if (deviceId) {
+      constraints.video.deviceId = { exact: deviceId };
+    }
+    return this.decodeFromConstraints(constraints, videoElement, callback);
   }
 
   async decodeOnce() {

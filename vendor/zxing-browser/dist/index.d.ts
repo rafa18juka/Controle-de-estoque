@@ -4,6 +4,11 @@ export interface BrowserReaderOptions {
 
 declare class BrowserMultiFormatReader {
   constructor(options?: BrowserReaderOptions);
+  decodeFromConstraints(
+    constraints: MediaStreamConstraints,
+    videoElement: HTMLVideoElement | string,
+    callback: (result: string, rawResult: unknown) => void
+  ): Promise<BrowserMultiFormatReader>;
   decodeFromVideoDevice(
     deviceId: string | null,
     videoElement: HTMLVideoElement | string,
