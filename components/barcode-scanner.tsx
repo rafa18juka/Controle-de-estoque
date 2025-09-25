@@ -84,7 +84,7 @@ export function BarcodeScanner({
       return;
     }
 
-    if (!active || !videoRef.current || !deviceId) {
+    if (!active || !videoRef.current) {
       stopReader();
       setReady(false);
       onStatusChange?.("idle");
@@ -92,49 +92,87 @@ export function BarcodeScanner({
     }
 
     let cancelled = false;
-    setReady(false);
-    onStatusChange?.("initializing");
-    readerRef.current ??= new BrowserMultiFormatReader();
-    readerRef.current.reset();
-
     const videoElement = videoRef.current;
+    const reader = (readerRef.current ??= new BrowserMultiFormatReader());
 
-    readerRef.current
-      .decodeFromVideoDevice(deviceId, videoElement, (result: any) => {
-        if (!result) return;
-        const raw = typeof result === "string" ? result : typeof result.getText === "function" ? result.getText() : "";
-        const text = typeof raw === "string" ? raw.trim() : "";
-        if (!text) return;
-        const now = Date.now();
-        const last = lastResultRef.current;
-        if (last && last.value === text && now - last.timestamp < 1000) {
-          return;
+    const handleDecoded = (result: any) => {
+      if (!result) return;
+      const raw =
+        typeof result === "string"
+          ? result
+          : typeof result?.getText === "function"
+            ? result.getText()
+            : "";
+      const text = (raw || "").trim();
+      if (!text) return;
+      const now = Date.now();
+      const last = lastResultRef.current;
+      if (last && last.value === text && now - last.timestamp < 1000) {
+        return;
+      }
+      lastResultRef.current = { value: text, timestamp: now };
+      onResult(text);
+    };
+
+    const startReader = async () => {
+      setReady(false);
+      onStatusChange?.("initializing");
+      reader.reset();
+      videoElement.setAttribute("playsinline", "true");
+
+      try {
+        if (!deviceId) {
+          const constraints: MediaStreamConstraints = {
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          };
+          await reader.decodeFromConstraints(constraints, videoElement, handleDecoded);
+        } else {
+          await reader.decodeFromVideoDevice(deviceId, videoElement, handleDecoded);
         }
-        lastResultRef.current = { value: text, timestamp: now };
-        onResult(text);
-      })
-      .then(() => {
+
         if (cancelled) return;
+
         setReady(true);
         onStatusChange?.("ready");
         setLocalError(null);
         onError?.(null);
-      })
-      .catch((error) => {
+
+        try {
+          const devices = await listVideoInputDevices();
+          if (!cancelled) {
+            onDevicesChange?.(devices);
+          }
+        } catch {
+          // ignore refresh errors; UI can re-request devices later
+        }
+      } catch (error) {
         if (cancelled) return;
         console.error("Erro ao iniciar o scanner", error);
-        const message = error instanceof Error ? error.message : String(error);
+        const name =
+          typeof error === "object" && error !== null && "name" in error
+            ? String((error as { name?: string }).name)
+            : undefined;
+        const permissionDenied = name === "NotAllowedError" || name === "PermissionDeniedError";
+        const message = permissionDenied
+          ? "Permissao da camera negada. Habilite em Configuracoes do site -> Camera."
+          : error instanceof Error
+            ? error.message
+            : String(error);
         setLocalError(message);
         onError?.(message);
         onStatusChange?.("error");
-      });
+      }
+    };
+
+    void startReader();
 
     return () => {
       cancelled = true;
       stopReader();
       onStatusChange?.("idle");
     };
-  }, [active, deviceId, onResult, onError, onStatusChange, secureContext]);
+  }, [active, deviceId, onDevicesChange, onError, onResult, onStatusChange, secureContext]);
 
   useEffect(() => {
     if (!active) {
