@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --header-height: 64px;
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  min-height: 100%;
+  background-color: #f8fafc;
+}
+
+body {
+  font-family: var(--font-sans, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  color: #0f172a;
+}
+
+main {
+  min-height: calc(100vh - var(--header-height));
+}
+
+.table-input {
+  @apply w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200;
+}
+
+.card {
+  @apply rounded-2xl border border-slate-200 bg-white p-6 shadow-sm;
+}
+
+@layer base {
+  * {
+    @apply border-slate-200;
+  }
+  body {
+    @apply bg-slate-50 text-slate-900;
+  }
+}
+

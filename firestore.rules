@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userDoc(request.auth.uid).data.role == 'admin';
+    }
+
+    function isStaff() {
+      return isSignedIn() && userDoc(request.auth.uid).data.role == 'staff';
+    }
+
+    match /users/{userId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow write: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+      allow update: if isStaff() &&
+        request.resource.data.keys().hasOnly(['quantity', 'totalValue']) &&
+        request.resource.data.quantity is number &&
+        request.resource.data.quantity >= 0 &&
+        request.resource.data.quantity <= resource.data.quantity &&
+        request.resource.data.totalValue == request.resource.data.quantity * resource.data.unitPrice;
+    }
+
+    match /stockMovements/{movementId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() || (isStaff() &&
+        request.resource.data.type == 'out' &&
+        request.resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
