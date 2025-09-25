@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, ScanLine, BarChart2, Package, LogOut } from "lucide-react";
+import { Menu, ScanLine, BarChart2, Package, LogOut, History } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -20,7 +20,8 @@ export function Navbar() {
   const links = useMemo(() => {
     if (!user) return [] as Array<{ href: string; label: string; icon: ReactNode }>;
     const base = [
-      { href: "/scan", label: "Escanear", icon: <ScanLine size={16} /> }
+      { href: "/scan", label: "Escanear", icon: <ScanLine size={16} /> },
+      { href: "/history", label: "Historico", icon: <History size={16} /> }
     ];
     if (user.role === "admin") {
       base.push(
