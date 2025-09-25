@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
 
-import { BrowserMultiFormatReader, listVideoInputDevices } from "@zxing/browser";
+import { BrowserCodeReader, BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 
 const SECURE_CONTEXT_MESSAGE = "Use HTTPS ou localhost para liberar o acesso a camera.";
 
@@ -31,6 +31,7 @@ export function BarcodeScanner({
 }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
   const lastResultRef = useRef<{ value: string; timestamp: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [secureContext, setSecureContext] = useState(true);
@@ -58,7 +59,7 @@ export function BarcodeScanner({
 
     const loadDevices = async () => {
       try {
-        const devices = await listVideoInputDevices();
+        const devices = await BrowserCodeReader.listVideoInputDevices();
         if (cancelled) return;
         onDevicesChange?.(devices);
       } catch (error) {
@@ -93,7 +94,8 @@ export function BarcodeScanner({
 
     let cancelled = false;
     const videoElement = videoRef.current;
-    const reader = (readerRef.current ??= new BrowserMultiFormatReader());
+    const reader = readerRef.current ?? new BrowserMultiFormatReader();
+    readerRef.current = reader;
 
     const handleDecoded = (result: any) => {
       if (!result) return;
@@ -117,29 +119,29 @@ export function BarcodeScanner({
     const startReader = async () => {
       setReady(false);
       onStatusChange?.("initializing");
-      reader.reset();
       videoElement.setAttribute("playsinline", "true");
+      videoElement.setAttribute("autoplay", "true");
+      videoElement.setAttribute("muted", "true");
+      videoElement.playsInline = true;
+      videoElement.autoplay = true;
+      videoElement.muted = true;
 
       try {
-        if (!deviceId) {
-          const constraints: MediaStreamConstraints = {
-            video: { facingMode: { ideal: "environment" } },
-            audio: false
-          };
-          await reader.decodeFromConstraints(constraints, videoElement, handleDecoded);
-        } else {
-          await reader.decodeFromVideoDevice(deviceId, videoElement, handleDecoded);
+        const controls = await reader.decodeFromVideoDevice(deviceId ?? undefined, videoElement, handleDecoded);
+
+        if (cancelled) {
+          controls.stop();
+          return;
         }
 
-        if (cancelled) return;
-
+        controlsRef.current = controls;
         setReady(true);
         onStatusChange?.("ready");
         setLocalError(null);
         onError?.(null);
 
         try {
-          const devices = await listVideoInputDevices();
+          const devices = await BrowserCodeReader.listVideoInputDevices();
           if (!cancelled) {
             onDevicesChange?.(devices);
           }
@@ -149,16 +151,11 @@ export function BarcodeScanner({
       } catch (error) {
         if (cancelled) return;
         console.error("Erro ao iniciar o scanner", error);
-        const name =
-          typeof error === "object" && error !== null && "name" in error
-            ? String((error as { name?: string }).name)
-            : undefined;
+        const name = error instanceof Error ? error.name : undefined;
         const permissionDenied = name === "NotAllowedError" || name === "PermissionDeniedError";
         const message = permissionDenied
           ? "Permissao da camera negada. Habilite em Configuracoes do site -> Camera."
-          : error instanceof Error
-            ? error.message
-            : String(error);
+          : "Falha ao iniciar a camera.";
         setLocalError(message);
         onError?.(message);
         onStatusChange?.("error");
@@ -193,20 +190,23 @@ export function BarcodeScanner({
   return (
     <div className={`flex flex-col gap-3 ${className ?? ""}`}>
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-900/70 p-2 shadow-inner">
-        <video ref={videoRef} className="aspect-video w-full rounded-lg bg-black object-cover" muted playsInline />
+        <video ref={videoRef} className="aspect-video w-full rounded-lg bg-black object-cover" autoPlay muted playsInline />
       </div>
       <span className="text-xs text-slate-500">{statusMessage}</span>
     </div>
   );
 
   function stopReader() {
-    if (readerRef.current) {
+    if (controlsRef.current) {
       try {
-        readerRef.current.reset();
+        controlsRef.current.stop();
       } catch (error) {
-        console.warn("Falha ao resetar o scanner", error);
+        console.warn("Falha ao parar o scanner", error);
+      } finally {
+        controlsRef.current = null;
       }
     }
+    readerRef.current = null;
     if (videoRef.current) {
       const stream = videoRef.current.srcObject as MediaStream | null;
       if (stream) {
@@ -216,4 +216,6 @@ export function BarcodeScanner({
     }
   }
 }
+
+
 
