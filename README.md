@@ -83,6 +83,18 @@ A aplicação ficará disponível em `http://localhost:3000`.
 - No desktop, escolha a câmera pelo seletor do scanner. Em celulares, adicione o app ao home screen para experiência quase nativa.
 - Para ambientes que não suportam `BarcodeDetector`, informe o SKU manualmente.
 
+## Historico & Scanner com Enter
+
+- A tela `/scan` aceita leitores manuais (USB/Bluetooth) que enviam Enter ao final. O campo de SKU mantem foco automatico e a baixa é registrada imediatamente com quantidade padrão 1.
+- Informe uma quantidade diferente de 1 antes do Enter ou do clique em **Dar baixa** para aplicar o novo valor.
+- O botão **Scan** alterna o uso da câmera; quando o navegador não estiver em contexto seguro (HTTPS ou localhost) apenas o fluxo manual fica disponível com aviso na interface.
+- A tela `/history` lista movimentos (`stockMovements`) com filtros por intervalo, SKU, usuário e exportação CSV.
+
+### Permissoes de papel
+
+- `staff`: pode executar transações de baixa e registrar movimentos `type: "out"` via scanner ou entrada manual.
+- `admin`: possui acesso completo (CRUD) a produtos, movimentos e toda a área administrativa.
+
 ## Estrutura de rotas
 
 | Rota | Papel | Descrição |
