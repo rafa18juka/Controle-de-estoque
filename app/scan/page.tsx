@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-
-import { BarcodeScanner } from "@/components/barcode-scanner";
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { useAuth } from "@/components/providers/auth-provider";
-import { ensureFirebase } from "@/lib/firebase-client";
+import { getProductBySku, processStockOut } from "@/lib/firestore";
 import type { Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
+
+const BarcodeScanner = dynamic(() => import("@/components/barcode-scanner").then((mod) => mod.BarcodeScanner), {
+  ssr: false
+});
+
+type ScannerStatus = "idle" | "initializing" | "ready" | "error";
+
+const SECURE_CONTEXT_WARNING = "Use HTTPS ou localhost para acessar a camera.";
 
 export default function ScanPage() {
   return (
@@ -25,109 +34,224 @@ export default function ScanPage() {
 
 function ScanContent() {
   const { user } = useAuth();
-  const [currentSku, setCurrentSku] = useState<string>("");
-  const [product, setProduct] = useState<Product | null>(null);
-  const [quantity, setQuantity] = useState(1);
-  const [loadingProduct, setLoadingProduct] = useState(false);
+
+  const skuInputRef = useRef<HTMLInputElement>(null);
+  const secureToastShown = useRef(false);
+  const scannerErrorRef = useRef<string | null>(null);
+
+  const [sku, setSku] = useState("");
+  const [quantity, setQuantity] = useState("1");
   const [processing, setProcessing] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [secureContext, setSecureContext] = useState(true);
+  const [scannerStatus, setScannerStatus] = useState<ScannerStatus>("idle");
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
+  const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
+  const [processedProduct, setProcessedProduct] = useState<Product | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
-    if (!currentSku) {
-      setProduct(null);
+    skuInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!secureContext && !secureToastShown.current) {
+      toast.warning(SECURE_CONTEXT_WARNING);
+      secureToastShown.current = true;
+    }
+    if (secureContext) {
+      secureToastShown.current = false;
+    }
+  }, [secureContext]);
+
+  useEffect(() => {
+    if (scannerError && scannerError !== scannerErrorRef.current) {
+      toast.error(scannerError);
+      scannerErrorRef.current = scannerError;
+    }
+    if (!scannerError) {
+      scannerErrorRef.current = null;
+    }
+  }, [scannerError]);
+
+  useEffect(() => {
+    if (!devices.length) {
+      setActiveDeviceId(null);
+      setScanning(false);
       return;
     }
+    if (!activeDeviceId) {
+      setActiveDeviceId(devices[0].deviceId || null);
+    }
+  }, [devices, activeDeviceId]);
 
-    const lookup = async () => {
-      setLoadingProduct(true);
-      try {
-        const bundle = await ensureFirebase();
-        const { firestore } = bundle;
-        const querySnapshot = await firestore.getDocs(
-          firestore.query(
-            firestore.collection(bundle.db, "products"),
-            firestore.where("sku", "==", currentSku)
-          )
-        );
-        if (!querySnapshot.empty) {
-          const doc = querySnapshot.docs[0];
-          const data = doc.data();
-          setProduct({ id: doc.id, ...data } as Product);
-        } else {
-          setProduct(null);
-          toast.error("Produto não encontrado para este SKU");
-        }
-      } catch (error) {
-        console.error(error);
-        toast.error("Falha ao buscar produto. Verifique sua conexão.");
-      } finally {
-        setLoadingProduct(false);
+  useEffect(() => {
+    if (!secureContext) {
+      setScanning(false);
+    }
+  }, [secureContext]);
+
+  const handleDevicesChange = useCallback((list: MediaDeviceInfo[]) => {
+    setDevices(list);
+    if (list.length === 0) {
+      setActiveDeviceId(null);
+    }
+  }, []);
+
+  const handleScannerStatus = useCallback((status: ScannerStatus) => {
+    setScannerStatus(status);
+  }, []);
+
+  const handleProcess = useCallback(
+    async (formSku?: string) => {
+      const targetSku = (formSku ?? sku).trim();
+      if (!targetSku) {
+        toast.error("Informe um SKU valido.");
+        return;
       }
-    };
 
-    lookup();
-  }, [currentSku]);
+      if (!user) {
+        toast.error("Usuario nao autenticado.");
+        return;
+      }
 
-  const handleScan = (value: string) => {
-    setCurrentSku(value.trim());
-  };
+      if (processing) {
+        return;
+      }
 
-  const handleQuantityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const next = Number(event.target.value) || 1;
-    setQuantity(Math.max(1, next));
-  };
+      const qtyValue = Math.max(1, Number.parseInt(quantity, 10) || 1);
 
-  const handleSubmit = async () => {
-    if (!user || !product) return;
-    if (quantity <= 0) {
-      toast.error("Informe uma quantidade válida");
+      setProcessing(true);
+
+      try {
+        const { product } = await processStockOut({
+          sku: targetSku,
+          qty: qtyValue,
+          userId: user.uid,
+          userName: user.displayName || user.email || "desconhecido"
+        });
+
+        setProcessedProduct(product);
+        setPreviewProduct(null);
+        setPreviewLoading(false);
+        toast.success("Baixa realizada.");
+        setSku("");
+        setQuantity("1");
+        skuInputRef.current?.focus();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Falha ao registrar a baixa.";
+        if (message.toLowerCase().includes("estoque insuficiente")) {
+          toast.error("Estoque insuficiente.");
+        } else if (message.toLowerCase().includes("produto nao encontrado")) {
+          toast.error("SKU nao encontrado.");
+        } else if (message.toLowerCase().includes("usuario nao autenticado")) {
+          toast.error("Usuario nao autenticado.");
+        } else {
+          toast.error(message);
+        }
+      } finally {
+        setProcessing(false);
+      }
+    },
+    [processing, quantity, sku, user]
+  );
+
+  const handleSubmit = useCallback(
+    async (event?: FormEvent<HTMLFormElement>) => {
+      event?.preventDefault();
+      await handleProcess();
+    },
+    [handleProcess]
+  );
+
+  const handleSkuChange = useCallback((value: string) => {
+    setSku(value);
+  }, []);
+
+  const handleSkuKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleProcess();
+      }
+    },
+    [handleProcess]
+  );
+
+  const handleQuantityChange = useCallback((value: string) => {
+    setQuantity(value);
+  }, []);
+
+  const handleScannerResult = useCallback(
+    async (value: string) => {
+      const cleaned = value.trim();
+      if (!cleaned) return;
+      setSku(cleaned);
+      await handleProcess(cleaned);
+    },
+    [handleProcess]
+  );
+
+  const handleScanToggle = useCallback(() => {
+    if (!secureContext) {
+      toast.warning(SECURE_CONTEXT_WARNING);
+      return;
+    }
+    if (!activeDeviceId) {
+      toast.error("Nenhuma camera disponivel.");
+      return;
+    }
+    setScanning((prev) => !prev);
+  }, [activeDeviceId, secureContext]);
+
+  const scannerStatusLabel = useMemo(() => {
+    if (!secureContext) return "Camera indisponivel";
+    switch (scannerStatus) {
+      case "initializing":
+        return "Iniciando camera...";
+      case "ready":
+        return "Camera pronta";
+      case "error":
+        return "Falha no scanner";
+      default:
+        return scanning ? "Scanner ativo" : "Scanner pausado";
+    }
+  }, [scannerStatus, secureContext, scanning]);
+
+  useEffect(() => {
+    const trimmed = sku.trim();
+    if (!trimmed) {
+      setPreviewProduct(null);
+      setPreviewLoading(false);
       return;
     }
 
-    setProcessing(true);
-    try {
-      const bundle = await ensureFirebase();
-      const { firestore } = bundle;
-      await firestore.runTransaction(bundle.db, async (transaction: any) => {
-        const productRef = firestore.doc(bundle.db, "products", product.id);
-        const snapshot = await transaction.get(productRef);
-        if (!snapshot.exists()) {
-          throw new Error("Produto não encontrado");
+    let cancelled = false;
+    const timeout = window.setTimeout(async () => {
+      setPreviewLoading(true);
+      try {
+        const product = await getProductBySku(trimmed);
+        if (!cancelled) {
+          setPreviewProduct(product);
         }
-        const data = snapshot.data();
-        const currentQuantity = data.quantity ?? 0;
-        if (currentQuantity < quantity) {
-          throw new Error("Estoque insuficiente para essa saída");
+      } finally {
+        if (!cancelled) {
+          setPreviewLoading(false);
         }
-        const newQuantity = currentQuantity - quantity;
-        transaction.update(productRef, {
-          quantity: newQuantity,
-          totalValue: Number((newQuantity * data.unitPrice).toFixed(2))
-        });
-        const movementsRef = firestore.collection(bundle.db, "stockMovements");
-        const movementDoc = firestore.doc(movementsRef);
-        transaction.set(movementDoc, {
-          productId: product.id,
-          sku: product.sku,
-          qty: quantity,
-          type: "out",
-          userId: user.uid,
-          userName: user.displayName ?? user.email,
-          timestamp: Date.now()
-        });
-      });
-      toast.success("Saída registrada com sucesso");
-      setQuantity(1);
-      setCurrentSku("");
-      setProduct(null);
-    } catch (error) {
-      console.error(error);
-      toast.error(error instanceof Error ? error.message : "Não foi possível registrar a saída");
-    } finally {
-      setProcessing(false);
-    }
-  };
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [sku]);
 
   const productDetails = useMemo(() => {
+    const trimmedSku = sku.trim();
+    const product = previewProduct ?? (trimmedSku ? null : processedProduct);
     if (!product) return null;
     return (
       <div className="card space-y-2">
@@ -137,13 +261,13 @@ function ScanContent() {
             <span className="font-medium text-slate-500">SKU:</span> {product.sku}
           </div>
           <div>
-            <span className="font-medium text-slate-500">Preço:</span> {formatCurrency(product.unitPrice)}
+            <span className="font-medium text-slate-500">Preco:</span> {formatCurrency(product.unitPrice)}
           </div>
           <div>
-            <span className="font-medium text-slate-500">Categoria:</span> {product.category ?? "—"}
+            <span className="font-medium text-slate-500">Categoria:</span> {product.category ?? "-"}
           </div>
           <div>
-            <span className="font-medium text-slate-500">Fornecedor:</span> {product.supplier ?? "—"}
+            <span className="font-medium text-slate-500">Fornecedor:</span> {product.supplier ?? "-"}
           </div>
           <div>
             <span className="font-medium text-slate-500">Estoque atual:</span> {product.quantity}
@@ -154,36 +278,89 @@ function ScanContent() {
         </div>
       </div>
     );
-  }, [product]);
+  }, [previewProduct, processedProduct, sku]);
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-card lg:flex-row">
+      <div className="flex flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card lg:flex-row">
         <div className="flex-1 space-y-4">
-          <h2 className="text-xl font-semibold text-slate-900">Escanear código de barras</h2>
-          <p className="text-sm text-slate-500">
-            Aponte a câmera para o código Code128 do produto. Você também pode digitar o SKU manualmente.
-          </p>
-          <BarcodeScanner onResult={handleScan} />
-        </div>
-        <div className="flex w-full max-w-sm flex-col gap-4">
           <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-600">SKU detectado</label>
+            <h2 className="text-xl font-semibold text-slate-900">Escanear codigo de barras</h2>
+            <p className="text-sm text-slate-500">
+              Use a camera para ler o codigo ou digite o SKU manualmente. Em conexoes HTTP, apenas a entrada manual fica ativa.
+            </p>
+          </div>
+          {!secureContext && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              {SECURE_CONTEXT_WARNING}
+            </div>
+          )}
+          <BarcodeScanner
+            active={!processing && scanning && secureContext && Boolean(activeDeviceId)}
+            deviceId={activeDeviceId}
+            onResult={handleScannerResult}
+            onDevicesChange={handleDevicesChange}
+            onSecureContextChange={setSecureContext}
+            onStatusChange={handleScannerStatus}
+            onError={setScannerError}
+          />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Button
+              type="button"
+              variant={scanning && secureContext ? "default" : "outline"}
+              onClick={handleScanToggle}
+              disabled={processing || !secureContext || !activeDeviceId}
+            >
+              {scanning && secureContext ? "Pausar scan" : "Iniciar scan"}
+            </Button>
+            <Select
+              value={activeDeviceId ?? ""}
+              onChange={(event) => setActiveDeviceId(event.target.value || null)}
+              disabled={!secureContext || processing || devices.length === 0}
+              className="sm:w-64"
+            >
+              <option value="">{devices.length === 0 ? "Nenhuma camera detectada" : "Trocar camera"}</option>
+              {devices.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label || "Camera"}
+                </option>
+              ))}
+            </Select>
+            <span className="text-xs text-slate-500 sm:ml-auto">{scannerStatusLabel}</span>
+          </div>
+        </div>
+
+        <form className="w-full max-w-sm space-y-4" onSubmit={handleSubmit}>
+          <div className="space-y-2">
+            <Label htmlFor="sku">SKU</Label>
             <Input
-              value={currentSku}
+              id="sku"
+              ref={skuInputRef}
+              autoComplete="off"
+              autoFocus
+              value={sku}
               placeholder="000000000000"
-              onChange={(event) => setCurrentSku(event.target.value)}
+              onChange={(event) => handleSkuChange(event.target.value)}
+              onKeyDown={handleSkuKeyDown}
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-600">Quantidade para baixa</label>
-            <Input type="number" min={1} value={quantity} onChange={handleQuantityChange} />
+            <Label htmlFor="quantity">Quantidade</Label>
+            <Input
+              id="quantity"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={quantity}
+              onChange={(event) => handleQuantityChange(event.target.value)}
+            />
+            <p className="text-xs text-slate-500">Se vazio ou 0, usa valor padrao 1.</p>
           </div>
-          <Button onClick={handleSubmit} disabled={!product || processing} className="w-full">
-            {processing ? "Processando…" : "Dar baixa"}
+          <Button type="submit" className="w-full" disabled={processing || !sku.trim()}>
+            {processing ? "Processando..." : "Dar baixa"}
           </Button>
-          {loadingProduct && <p className="text-sm text-slate-500">Buscando produto…</p>}
-        </div>
+          {previewLoading && <p className="text-sm text-slate-500">Buscando produto...</p>}
+        </form>
       </div>
       {productDetails}
     </div>
