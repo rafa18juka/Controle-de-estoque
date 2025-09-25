@@ -79,7 +79,6 @@ function ScanContent() {
   useEffect(() => {
     if (!devices.length) {
       setActiveDeviceId(null);
-      setScanning(false);
       return;
     }
     if (!activeDeviceId) {
@@ -199,12 +198,14 @@ function ScanContent() {
       toast.warning(SECURE_CONTEXT_WARNING);
       return;
     }
-    if (!activeDeviceId) {
-      toast.error("Nenhuma camera disponivel.");
-      return;
-    }
-    setScanning((prev) => !prev);
-  }, [activeDeviceId, secureContext]);
+    setScanning((prev) => {
+      const next = !prev;
+      if (next && devices.length === 0) {
+        setActiveDeviceId(null);
+      }
+      return next;
+    });
+  }, [devices, secureContext]);
 
   const scannerStatusLabel = useMemo(() => {
     if (!secureContext) return "Camera indisponivel";
@@ -296,7 +297,7 @@ function ScanContent() {
             </div>
           )}
           <BarcodeScanner
-            active={!processing && scanning && secureContext && Boolean(activeDeviceId)}
+            active={!processing && scanning && secureContext}
             deviceId={activeDeviceId}
             onResult={handleScannerResult}
             onDevicesChange={handleDevicesChange}
@@ -309,7 +310,7 @@ function ScanContent() {
               type="button"
               variant={scanning && secureContext ? "default" : "outline"}
               onClick={handleScanToggle}
-              disabled={processing || !secureContext || !activeDeviceId}
+              disabled={processing || !secureContext}
             >
               {scanning && secureContext ? "Pausar scan" : "Iniciar scan"}
             </Button>
