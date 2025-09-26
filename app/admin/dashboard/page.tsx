@@ -77,7 +77,18 @@ function DashboardContent() {
         const loadedProducts: Product[] = productsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
         setProducts(loadedProducts);
         const movementsSnapshot = await firestore.getDocs(firestore.collection(bundle.db, "stockMovements"));
-        const loadedMovements: StockMovement[] = movementsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+        const loadedMovements: StockMovement[] = movementsSnapshot.docs.map((doc: any) => {
+          const data = doc.data();
+          const timestampValue =
+            data.timestamp && typeof data.timestamp.toMillis === "function"
+              ? data.timestamp.toMillis()
+              : Number(data.timestamp ?? 0);
+          return {
+            id: doc.id,
+            ...data,
+            timestamp: timestampValue
+          } as StockMovement;
+        });
         setMovements(loadedMovements);
       } catch (error) {
         console.error(error);
@@ -364,6 +375,8 @@ function DashboardContent() {
     </div>
   );
 }
+
+
 
 
 
