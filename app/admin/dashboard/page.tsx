@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   addDays,
@@ -25,6 +25,7 @@ import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { StatsCard } from "@/components/stats-card";
 import { ensureFirebase } from "@/lib/firebase-client";
 import type { Product, StockMovement } from "@/lib/types";
@@ -268,58 +269,108 @@ function DashboardContent() {
   );
 
   const movementRangeLabel = MOVEMENT_RANGE_OPTIONS.find((option) => option.value === movementRange)?.label ?? "";
+  const hasActiveFilters = Boolean(categoryFilter || supplierFilter || productFilter) || movementRange !== "day";
 
   return (
     <div className="space-y-8">
-      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Dashboard de Estoque</h1>
-          <p className="text-sm text-slate-500">
-            Visao geral do estoque atual, valor em prateleira e historico de saidas.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-            <option value="">Todas as categorias</option>
-            {categories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </Select>
-          <Select value={supplierFilter} onChange={(event) => setSupplierFilter(event.target.value)}>
-            <option value="">Todos os fornecedores</option>
-            {suppliers.map((supplier) => (
-              <option key={supplier} value={supplier}>
-                {supplier}
-              </option>
-            ))}
-          </Select>
-          <Select value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
-            <option value="">Todos os produtos</option>
-            {productOptions.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name} ({product.sku})
-              </option>
-            ))}
-          </Select>
-          <Select value={movementRange} onChange={(event) => setMovementRange(event.target.value as MovementRange)}>
-            {MOVEMENT_RANGE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setCategoryFilter("");
-              setSupplierFilter("");
-              setProductFilter("");
-            }}
-          >
-            Limpar filtros
-          </Button>
+      <header>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900">Dashboard de Estoque</h1>
+              <p className="text-sm text-slate-500">
+                Visao geral do estoque atual, valor em prateleira e historico de saidas.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-start rounded-lg px-3 text-sm font-semibold text-slate-600 hover:text-slate-900"
+              onClick={() => {
+                setCategoryFilter("");
+                setSupplierFilter("");
+                setProductFilter("");
+                setMovementRange("day");
+              }}
+              disabled={!hasActiveFilters}
+            >
+              Limpar filtros
+            </Button>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="space-y-1">
+              <Label htmlFor="dashboard-category" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Categoria
+              </Label>
+              <Select
+                id="dashboard-category"
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+                className="min-w-[200px]"
+              >
+                <option value="">Todas as categorias</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="dashboard-supplier" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Fornecedor
+              </Label>
+              <Select
+                id="dashboard-supplier"
+                value={supplierFilter}
+                onChange={(event) => setSupplierFilter(event.target.value)}
+                className="min-w-[200px]"
+              >
+                <option value="">Todos os fornecedores</option>
+                {suppliers.map((supplier) => (
+                  <option key={supplier} value={supplier}>
+                    {supplier}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="dashboard-product" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Produto
+              </Label>
+              <Select
+                id="dashboard-product"
+                value={productFilter}
+                onChange={(event) => setProductFilter(event.target.value)}
+                className="min-w-[200px]"
+              >
+                <option value="">Todos os produtos</option>
+                {productOptions.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} ({product.sku})
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="dashboard-range" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Periodo
+              </Label>
+              <Select
+                id="dashboard-range"
+                value={movementRange}
+                onChange={(event) => setMovementRange(event.target.value as MovementRange)}
+                className="min-w-[200px]"
+              >
+                {MOVEMENT_RANGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -375,6 +426,9 @@ function DashboardContent() {
     </div>
   );
 }
+
+
+
 
 
 
