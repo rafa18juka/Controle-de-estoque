@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import type { Product } from "@/lib/types";
@@ -43,6 +43,7 @@ export function EditableTable({
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Partial<Product>>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
   const [sortState, setSortState] = useState<{ key: SortKey; order: "asc" | "desc" }>({ key: "name", order: "asc" });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -96,33 +97,63 @@ export function EditableTable({
   const ariaSortFor = (key: SortKey): "ascending" | "descending" | "none" =>
     sortState.key === key ? (sortState.order === "asc" ? "ascending" : "descending") : "none";
 
+  const filteredProducts = useMemo(() => {
+    const trimmedTerm = searchTerm.trim();
+    if (!trimmedTerm) return products;
+
+    const normalizedTerm = trimmedTerm
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+    const matches = (value: unknown) => {
+      if (value === null || value === undefined) return false;
+      return value
+        .toString()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .includes(normalizedTerm);
+    };
+
+    return products.filter((product) => {
+      const merged = { ...product, ...drafts[product.id] };
+      return (
+        matches(merged.name) ||
+        matches(merged.sku) ||
+        matches(merged.category) ||
+        matches(merged.supplier)
+      );
+    });
+  }, [products, drafts, searchTerm]);
+
   const sortedProducts = useMemo(() => {
     const { key, order } = sortState;
     const direction = order === "asc" ? 1 : -1;
 
     const valueFor = (product: Product) => {
-    const merged = { ...product, ...drafts[product.id] } as Product & Partial<Product>;
+      const merged = { ...product, ...drafts[product.id] } as Product & Partial<Product>;
 
-    switch (key) {
-      case "unitPrice":
-        return typeof merged.unitPrice === "number" ? merged.unitPrice : Number(merged.unitPrice ?? 0);
-      case "quantity":
-        return typeof merged.quantity === "number" ? merged.quantity : Number(merged.quantity ?? 0);
-      case "totalValue":
-        return typeof merged.totalValue === "number" ? merged.totalValue : Number(merged.totalValue ?? 0);
-      case "sku":
-        return (merged.sku ?? "").toString();
-      case "category":
-        return (merged.category ?? "").toString();
-      case "supplier":
-        return (merged.supplier ?? "").toString();
-      case "name":
-      default:
-        return (merged.name ?? "").toString();
-    }
-  };
+      switch (key) {
+        case "unitPrice":
+          return typeof merged.unitPrice === "number" ? merged.unitPrice : Number(merged.unitPrice ?? 0);
+        case "quantity":
+          return typeof merged.quantity === "number" ? merged.quantity : Number(merged.quantity ?? 0);
+        case "totalValue":
+          return typeof merged.totalValue === "number" ? merged.totalValue : Number(merged.totalValue ?? 0);
+        case "sku":
+          return (merged.sku ?? "").toString();
+        case "category":
+          return (merged.category ?? "").toString();
+        case "supplier":
+          return (merged.supplier ?? "").toString();
+        case "name":
+        default:
+          return (merged.name ?? "").toString();
+      }
+    };
 
-    return [...products].sort((a, b) => {
+    return [...filteredProducts].sort((a, b) => {
       const aValue = valueFor(a);
       const bValue = valueFor(b);
 
@@ -132,7 +163,24 @@ export function EditableTable({
 
       return aValue.toString().localeCompare(bValue.toString(), "pt-BR", { sensitivity: "base" }) * direction;
     });
-  }, [products, drafts, sortState]);
+  }, [filteredProducts, drafts, sortState]);
+
+  const visibleIds = useMemo(() => sortedProducts.map((product) => product.id), [sortedProducts]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  const someVisibleSelected = visibleIds.some((id) => selected.includes(id));
+
+  const handleToggleAllVisible = (checked: boolean) => {
+    setSelected((prev) => {
+      if (checked) {
+        const merged = new Set(prev);
+        visibleIds.forEach((id) => merged.add(id));
+        return Array.from(merged);
+      }
+      if (!prev.length) return prev;
+      const toRemove = new Set(visibleIds);
+      return prev.filter((id) => !toRemove.has(id));
+    });
+  };
 
   const selectedProducts = products.filter((product) => selected.includes(product.id));
 
@@ -157,34 +205,51 @@ export function EditableTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={onCreate}>Novo produto</Button>
-        <Button
-          variant="outline"
-          onClick={() => onDelete(selected)}
-          disabled={!selected.length}
-        >
-          Excluir selecionados
-        </Button>
-        <Button variant="outline" onClick={handleGenerateLabels} disabled={!selected.length}>
-          Gerar etiquetas
-        </Button>
-        <Button variant="outline" onClick={onExport}>
-          Exportar JSON
-        </Button>
-        <Button variant="outline" onClick={handleImportClick}>
-          Importar JSON
-        </Button>
-        <Button variant="outline" onClick={onManageCategories}>
-          Categorias
-        </Button>
-        <Button variant="outline" onClick={onManageSuppliers}>
-          Fornecedores
-        </Button>
-        <Button variant="ghost" onClick={onSeed}>
-          Criar dados de exemplo
-        </Button>
-        <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleFileChange} />
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button onClick={onCreate}>Novo produto</Button>
+          <Button
+            variant="outline"
+            onClick={() => onDelete(selected)}
+            disabled={!selected.length}
+          >
+            Excluir selecionados
+          </Button>
+          <Button variant="outline" onClick={handleGenerateLabels} disabled={!selected.length}>
+            Gerar etiquetas
+          </Button>
+          <Button variant="outline" onClick={onExport}>
+            Exportar JSON
+          </Button>
+          <Button variant="outline" onClick={handleImportClick}>
+            Importar JSON
+          </Button>
+          <Button variant="outline" onClick={onManageCategories}>
+            Categorias
+          </Button>
+          <Button variant="outline" onClick={onManageSuppliers}>
+            Fornecedores
+          </Button>
+          <Button variant="ghost" onClick={onSeed}>
+            Criar dados de exemplo
+          </Button>
+          <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleFileChange} />
+        </div>
+        <div className="w-full max-w-md xl:ml-auto">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
+            <Input
+              type="search"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Buscar por nome, SKU, fornecedor ou categoria"
+              className="pl-9"
+              aria-label="Pesquisar produtos"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -204,10 +269,10 @@ export function EditableTable({
               <th className="px-3 py-3">
                 <input
                   type="checkbox"
-                  checked={selected.length === products.length && products.length > 0}
-                  onChange={(event) =>
-                    setSelected(event.target.checked ? products.map((product) => product.id) : [])
-                  }
+                  checked={allVisibleSelected}
+                  onChange={(event) => handleToggleAllVisible(event.target.checked)}
+                  aria-checked={someVisibleSelected && !allVisibleSelected ? "mixed" : allVisibleSelected}
+                  title="Selecionar resultados visiveis"
                 />
               </th>
               <th
@@ -304,104 +369,104 @@ export function EditableTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white text-sm">
-            {sortedProducts.map((product) => {
-              const draft = drafts[product.id] ?? {};
-              const merged = { ...product, ...draft };
-              return (
-                <tr key={product.id} className="hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(product.id)}
-                      onChange={() => toggleSelection(product.id)}
-                    />
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Input
-                      value={merged.name}
-                      onChange={(event) => handleDraftChange(product.id, "name", event.target.value)}
-                      onBlur={() => commitChanges(product.id)}
-                      title={merged.name ?? ""}
-                      className="h-auto min-h-[40px] w-full whitespace-normal break-words text-base md:text-[15px] lg:text-base md:whitespace-nowrap md:truncate"
-                    />
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Input
-                      value={merged.sku}
-                      onChange={(event) => handleDraftChange(product.id, "sku", event.target.value)}
-                      onBlur={() => commitChanges(product.id)}
-                      title={merged.sku ?? ""}
-                      className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={merged.unitPrice}
-                      onChange={(event) =>
-                        handleDraftChange(product.id, "unitPrice", Number(event.target.value))
-                      }
-                      onBlur={() => commitChanges(product.id)}
-                      title={merged.unitPrice?.toString() ?? ""}
-                      className="h-10 w-full text-right text-sm md:text-[13px] lg:text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Select
-                      value={merged.category ?? ""}
-                      onChange={(event) => handleDraftChange(product.id, "category", event.target.value)}
-                      onBlur={() => commitChanges(product.id)}
-                      className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
-                      title={merged.category ?? "Sem categoria"}
-                    >
-                      <option value="">Sem categoria</option>
-                      {categories.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </Select>
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Select
-                      value={merged.supplier ?? ""}
-                      onChange={(event) => handleDraftChange(product.id, "supplier", event.target.value)}
-                      onBlur={() => commitChanges(product.id)}
-                      className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
-                      title={merged.supplier ?? "Sem fornecedor"}
-                    >
-                      <option value="">Sem fornecedor</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier} value={supplier}>
-                          {supplier}
-                        </option>
-                      ))}
-                    </Select>
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    <Input
-                      type="number"
-                      min="0"
-                      value={merged.quantity}
-                      onChange={(event) => handleDraftChange(product.id, "quantity", Number(event.target.value))}
-                      onBlur={() => commitChanges(product.id)}
-                      title={merged.quantity?.toString() ?? ""}
-                      className="h-10 w-full text-right text-sm md:text-[13px] lg:text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-right font-semibold align-top" title={formatCurrency(product.totalValue ?? 0)}
-                    >
-                    {saving === product.id ? "Salvando…" : formatCurrency(product.totalValue)}
-                  </td>
-                </tr>
-              );
-            })}
-            {!products.length && (
+            {sortedProducts.length ? (
+              sortedProducts.map((product) => {
+                const draft = drafts[product.id] ?? {};
+                const merged = { ...product, ...draft };
+                return (
+                  <tr key={product.id} className="hover:bg-slate-50">
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(product.id)}
+                        onChange={() => toggleSelection(product.id)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Input
+                        value={merged.name}
+                        onChange={(event) => handleDraftChange(product.id, "name", event.target.value)}
+                        onBlur={() => commitChanges(product.id)}
+                        title={merged.name ?? ""}
+                        className="h-auto min-h-[40px] w-full whitespace-normal break-words text-base md:text-[15px] lg:text-base md:whitespace-nowrap md:truncate"
+                      />
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Input
+                        value={merged.sku}
+                        onChange={(event) => handleDraftChange(product.id, "sku", event.target.value)}
+                        onBlur={() => commitChanges(product.id)}
+                        title={merged.sku ?? ""}
+                        className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
+                      />
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={merged.unitPrice}
+                        onChange={(event) =>
+                          handleDraftChange(product.id, "unitPrice", Number(event.target.value))
+                        }
+                        onBlur={() => commitChanges(product.id)}
+                        title={merged.unitPrice?.toString() ?? ""}
+                        className="h-10 w-full text-right text-sm md:text-[13px] lg:text-sm"
+                      />
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Select
+                        value={merged.category ?? ""}
+                        onChange={(event) => handleDraftChange(product.id, "category", event.target.value)}
+                        onBlur={() => commitChanges(product.id)}
+                        className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
+                        title={merged.category ?? "Sem categoria"}
+                      >
+                        <option value="">Sem categoria</option>
+                        {categories.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Select
+                        value={merged.supplier ?? ""}
+                        onChange={(event) => handleDraftChange(product.id, "supplier", event.target.value)}
+                        onBlur={() => commitChanges(product.id)}
+                        className="h-10 w-full text-sm md:text-[13px] lg:text-sm"
+                        title={merged.supplier ?? "Sem fornecedor"}
+                      >
+                        <option value="">Sem fornecedor</option>
+                        {suppliers.map((supplier) => (
+                          <option key={supplier} value={supplier}>
+                            {supplier}
+                          </option>
+                        ))}
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Input
+                        type="number"
+                        min="0"
+                        value={merged.quantity}
+                        onChange={(event) => handleDraftChange(product.id, "quantity", Number(event.target.value))}
+                        onBlur={() => commitChanges(product.id)}
+                        title={merged.quantity?.toString() ?? ""}
+                        className="h-10 w-full text-right text-sm md:text-[13px] lg:text-sm"
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold align-top" title={formatCurrency(product.totalValue ?? 0)}>
+                      {saving === product.id ? "Salvando..." : formatCurrency(product.totalValue)}
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
               <tr>
                 <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
-                  Nenhum produto cadastrado ainda.
+                  {products.length ? "Nenhum produto encontrado para a pesquisa." : "Nenhum produto cadastrado ainda."}
                 </td>
               </tr>
             )}
