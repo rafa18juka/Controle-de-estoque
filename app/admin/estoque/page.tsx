@@ -17,7 +17,7 @@ import { Select } from "@/components/ui/select";
 import { ZPLPreview } from "@/components/zpl-preview";
 import { ensureFirebase } from "@/lib/firebase-client";
 import type { Category, Product, Supplier } from "@/lib/types";
-import { generateZPL } from "@/lib/zpl";
+import { generateZPL, type LabelItem } from "@/lib/zpl";
 
 const newProductSchema = z.object({
   name: z.string().min(2, "Informe o nome do produto"),
@@ -31,7 +31,7 @@ const newProductSchema = z.object({
 type NewProductValues = z.infer<typeof newProductSchema>;
 
 const LABEL_WIDTH_MM = 40;
-const LABEL_HEIGHT_MM = 25;
+const LABEL_HEIGHT_MM = 20;
 const LABEL_COLUMNS = 2;
 const LABEL_COLUMN_GAP_MM = 3;
 
@@ -54,9 +54,7 @@ function InventoryContent() {
   const [newProductOpen, setNewProductOpen] = useState(false);
   const [labelPreview, setLabelPreview] = useState<{
     zpl: string;
-    sku: string;
-    name: string;
-    unitPrice: number;
+    items: LabelItem[];
     count: number;
     quantity: number;
     widthMm: number;
@@ -366,30 +364,37 @@ function InventoryContent() {
   });
 
   const handleGenerateLabels = (selected: Product[], quantity: number) => {
-    if (!selected.length) return;
-    const zplBlocks = selected
-      .map((product) =>
-        Array.from({ length: quantity })
-          .map(() =>
-            generateZPL({
-              sku: product.sku,
-              name: product.name,
-              unitPrice: product.unitPrice,
-              widthMm: LABEL_WIDTH_MM,
-              heightMm: LABEL_HEIGHT_MM,
-              columns: LABEL_COLUMNS,
-              columnGapMm: LABEL_COLUMN_GAP_MM
-            })
-          )
-          .join("\n")
+    if (!selected.length || quantity <= 0) return;
+
+    const labelCopies: LabelItem[] = selected.flatMap((product) =>
+      Array.from({ length: quantity }, () => ({
+        sku: product.sku,
+        name: product.name
+      }))
+    );
+
+    if (!labelCopies.length) return;
+
+    const chunks: LabelItem[][] = [];
+    for (let index = 0; index < labelCopies.length; index += LABEL_COLUMNS) {
+      chunks.push(labelCopies.slice(index, index + LABEL_COLUMNS));
+    }
+
+    const zplBlocks = chunks
+      .map((items) =>
+        generateZPL({
+          items,
+          widthMm: LABEL_WIDTH_MM,
+          heightMm: LABEL_HEIGHT_MM,
+          columns: LABEL_COLUMNS,
+          columnGapMm: LABEL_COLUMN_GAP_MM
+        })
       )
       .join("\n");
-    const first = selected[0];
+
     setLabelPreview({
       zpl: zplBlocks,
-      sku: first.sku,
-      name: first.name,
-      unitPrice: first.unitPrice,
+      items: labelCopies,
       count: selected.length,
       quantity,
       widthMm: LABEL_WIDTH_MM,
@@ -398,7 +403,6 @@ function InventoryContent() {
       columnGapMm: LABEL_COLUMN_GAP_MM
     });
   };
-
   const handleExport = () => {
     const payload = JSON.stringify(products, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
@@ -567,7 +571,9 @@ function InventoryContent() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Novo produto</DialogTitle>
-            <DialogDescription>Preencha os dados básicos do produto. O SKU deve ser único.</DialogDescription>
+            <DialogDescription>
+              Insira as informacoes abaixo para cadastrar um novo produto no estoque.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreateProduct} className="space-y-4">
             <div className="space-y-2">
@@ -761,21 +767,18 @@ function InventoryContent() {
               <DialogHeader>
                 <DialogTitle>Etiquetas geradas</DialogTitle>
                 <DialogDescription>
-                  Pré-visualização da primeira etiqueta. O arquivo conterá {labelPreview.count} produto(s) com {labelPreview.quantity}{" "}
-                  etiqueta(s) cada.
+                  Pre-visualizacao das primeiras etiquetas. O arquivo contara {labelPreview.count} produto(s) com {labelPreview.quantity} etiqueta(s) cada.
                 </DialogDescription>
               </DialogHeader>
               <ZPLPreview
                 zpl={labelPreview.zpl}
-                sku={labelPreview.sku}
-                name={labelPreview.name}
-                unitPrice={labelPreview.unitPrice}
+                items={labelPreview.items}
                 widthMm={labelPreview.widthMm}
                 heightMm={labelPreview.heightMm}
                 columns={labelPreview.columns}
                 columnGapMm={labelPreview.columnGapMm}
-                fileName={`labels-${labelPreview.sku}`}
-                note={`Layout ${labelPreview.columns} colunas (${labelPreview.widthMm} x ${labelPreview.heightMm} mm por etiqueta). Use drivers Zebra compatíveis com ZPL em 203 dpi.`}
+                fileName={labelPreview.items[0]?.sku ? `labels-${labelPreview.items[0].sku}` : undefined}
+                note={`Layout ${labelPreview.columns} colunas (${labelPreview.widthMm} x ${labelPreview.heightMm} mm por etiqueta). Use drivers Zebra compativeis com ZPL em 203 dpi.`}
               />
             </div>
           ) : null}
@@ -784,6 +787,21 @@ function InventoryContent() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
