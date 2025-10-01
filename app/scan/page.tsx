@@ -1,26 +1,16 @@
-"use client";
+﻿"use client";
 
-import dynamic from "next/dynamic";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { useAuth } from "@/components/providers/auth-provider";
 import { getProductBySku, processStockOut } from "@/lib/firestore";
 import type { Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
-
-const BarcodeScanner = dynamic(() => import("@/components/barcode-scanner").then((mod) => mod.BarcodeScanner), {
-  ssr: false
-});
-
-type ScannerStatus = "idle" | "initializing" | "ready" | "error";
-
-const SECURE_CONTEXT_WARNING = "Use HTTPS ou localhost para acessar a camera.";
 
 export default function ScanPage() {
   return (
@@ -36,18 +26,11 @@ function ScanContent() {
   const { user } = useAuth();
 
   const skuInputRef = useRef<HTMLInputElement>(null);
-  const secureToastShown = useRef(false);
-  const scannerErrorRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const [sku, setSku] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [processing, setProcessing] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [secureContext, setSecureContext] = useState(true);
-  const [scannerStatus, setScannerStatus] = useState<ScannerStatus>("idle");
-  const [scannerError, setScannerError] = useState<string | null>(null);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
   const [processedProduct, setProcessedProduct] = useState<Product | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -57,61 +40,71 @@ function ScanContent() {
   }, []);
 
   useEffect(() => {
-    if (!secureContext && !secureToastShown.current) {
-      toast.warning(SECURE_CONTEXT_WARNING);
-      secureToastShown.current = true;
-    }
-    if (secureContext) {
-      secureToastShown.current = false;
-    }
-  }, [secureContext]);
-
-  useEffect(() => {
-    if (scannerError && scannerError !== scannerErrorRef.current) {
-      toast.error(scannerError);
-      scannerErrorRef.current = scannerError;
-    }
-    if (!scannerError) {
-      scannerErrorRef.current = null;
-    }
-  }, [scannerError]);
-
-  useEffect(() => {
-    if (!devices.length) {
-      setActiveDeviceId(null);
-      return;
-    }
-    if (!activeDeviceId) {
-      setActiveDeviceId(devices[0].deviceId || null);
-    }
-  }, [devices, activeDeviceId]);
-
-  useEffect(() => {
-    if (!secureContext) {
-      setScanning(false);
-    }
-  }, [secureContext]);
-
-  const handleDevicesChange = useCallback((list: MediaDeviceInfo[]) => {
-    setDevices(list);
-    if (list.length === 0) {
-      setActiveDeviceId(null);
-    }
+    return () => {
+      const ctx = audioContextRef.current;
+      if (ctx) {
+        audioContextRef.current = null;
+        ctx.close().catch(() => undefined);
+      }
+    };
   }, []);
 
-  const handleScannerStatus = useCallback((status: ScannerStatus) => {
-    setScannerStatus(status);
-  }, []);
+  const playTone = useCallback(
+    (frequency: number, durationMs: number, type: OscillatorType = "sine") => {
+      if (typeof window === "undefined") return;
+      const AudioContextConstructor = (window.AudioContext || (window as any).webkitAudioContext) as
+        | typeof AudioContext
+        | undefined;
+      if (!AudioContextConstructor) return;
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextConstructor();
+      }
+      const context = audioContextRef.current;
+      if (!context) return;
+
+      const start = () => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = type;
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        const now = context.currentTime;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + durationMs / 1000);
+        oscillator.start(now);
+        oscillator.stop(now + durationMs / 1000 + 0.05);
+      };
+
+      if (context.state === "suspended") {
+        void context.resume().then(start).catch(() => start());
+      } else {
+        start();
+      }
+    },
+    []
+  );
+
+  const playSuccessTone = useCallback(() => {
+    playTone(880, 160, "triangle");
+  }, [playTone]);
+
+  const playErrorTone = useCallback(() => {
+    playTone(220, 240, "sawtooth");
+  }, [playTone]);
 
   const handleProcess = useCallback(
     async (formSku?: string) => {
       const targetSku = (formSku ?? sku).trim();
       if (!targetSku) {
+        playErrorTone();
         toast.error("Informe um SKU valido.");
         return;
       }
 
       if (!user) {
+        playErrorTone();
         toast.error("Usuario nao autenticado.");
         return;
       }
@@ -135,11 +128,13 @@ function ScanContent() {
         setProcessedProduct(product);
         setPreviewProduct(null);
         setPreviewLoading(false);
+        playSuccessTone();
         toast.success("Baixa realizada.");
         setSku("");
         setQuantity("1");
         skuInputRef.current?.focus();
       } catch (error) {
+        playErrorTone();
         const message = error instanceof Error ? error.message : "Falha ao registrar a baixa.";
         if (message.toLowerCase().includes("estoque insuficiente")) {
           toast.error("Estoque insuficiente.");
@@ -154,7 +149,7 @@ function ScanContent() {
         setProcessing(false);
       }
     },
-    [processing, quantity, sku, user]
+    [playErrorTone, playSuccessTone, processing, quantity, sku, user]
   );
 
   const handleSubmit = useCallback(
@@ -170,10 +165,10 @@ function ScanContent() {
   }, []);
 
   const handleSkuKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLInputElement>) => {
+    (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        handleProcess();
+        void handleProcess(event.currentTarget.value);
       }
     },
     [handleProcess]
@@ -182,44 +177,6 @@ function ScanContent() {
   const handleQuantityChange = useCallback((value: string) => {
     setQuantity(value);
   }, []);
-
-  const handleScannerResult = useCallback(
-    async (value: string) => {
-      const cleaned = value.trim();
-      if (!cleaned) return;
-      setSku(cleaned);
-      await handleProcess(cleaned);
-    },
-    [handleProcess]
-  );
-
-  const handleScanToggle = useCallback(() => {
-    if (!secureContext) {
-      toast.warning(SECURE_CONTEXT_WARNING);
-      return;
-    }
-    setScanning((prev) => {
-      const next = !prev;
-      if (next && devices.length === 0) {
-        setActiveDeviceId(null);
-      }
-      return next;
-    });
-  }, [devices, secureContext]);
-
-  const scannerStatusLabel = useMemo(() => {
-    if (!secureContext) return "Camera indisponivel";
-    switch (scannerStatus) {
-      case "initializing":
-        return "Iniciando camera...";
-      case "ready":
-        return "Camera pronta";
-      case "error":
-        return "Falha no scanner";
-      default:
-        return scanning ? "Scanner ativo" : "Scanner pausado";
-    }
-  }, [scannerStatus, secureContext, scanning]);
 
   useEffect(() => {
     const trimmed = sku.trim();
@@ -283,57 +240,16 @@ function ScanContent() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card lg:flex-row">
-        <div className="flex-1 space-y-4">
-          <div className="space-y-2">
-            <h2 className="text-xl font-semibold text-slate-900">Escanear codigo de barras</h2>
-            <p className="text-sm text-slate-500">
-              Use a camera para ler o codigo ou digite o SKU manualmente. Em conexoes HTTP, apenas a entrada manual fica ativa.
-            </p>
-          </div>
-          {!secureContext && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              {SECURE_CONTEXT_WARNING}
-            </div>
-          )}
-          <BarcodeScanner
-            active={!processing && scanning && secureContext}
-            deviceId={activeDeviceId}
-            onResult={handleScannerResult}
-            onDevicesChange={handleDevicesChange}
-            onSecureContextChange={setSecureContext}
-            onStatusChange={handleScannerStatus}
-            onError={setScannerError}
-          />
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Button
-              type="button"
-              variant={scanning && secureContext ? "default" : "outline"}
-              onClick={handleScanToggle}
-              disabled={processing || !secureContext}
-            >
-              {scanning && secureContext ? "Pausar scan" : "Iniciar scan"}
-            </Button>
-            <Select
-              value={activeDeviceId ?? ""}
-              onChange={(event) => setActiveDeviceId(event.target.value || null)}
-              disabled={!secureContext || processing || devices.length === 0}
-              className="sm:w-64"
-            >
-              <option value="">{devices.length === 0 ? "Nenhuma camera detectada" : "Trocar camera"}</option>
-              {devices.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || "Camera"}
-                </option>
-              ))}
-            </Select>
-            <span className="text-xs text-slate-500 sm:ml-auto">{scannerStatusLabel}</span>
-          </div>
+      <div className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card">
+        <div className="space-y-2">
+          <h2 className="text-xl font-semibold text-slate-900">Registrar baixa por codigo</h2>
+          <p className="text-sm text-slate-500">
+            Digite o codigo (SKU ou QR) manualmente ou utilize um leitor fisico que atua como teclado para preencher o campo abaixo. Captura por camera foi desativada.
+          </p>
         </div>
-
         <form className="w-full max-w-sm space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-2">
-            <Label htmlFor="sku">SKU</Label>
+            <Label htmlFor="sku">Codigo (SKU ou QR)</Label>
             <Input
               id="sku"
               ref={skuInputRef}
