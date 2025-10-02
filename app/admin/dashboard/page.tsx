@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   addDays,
@@ -16,7 +16,7 @@ import {
   subYears
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import dynamic from "next/dynamic";
@@ -24,21 +24,95 @@ import dynamic from "next/dynamic";
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { StatsCard } from "@/components/stats-card";
 import { ensureFirebase } from "@/lib/firebase-client";
+import { fetchMovementUsers, type MovementUserOption } from "@/lib/firestore";
 import type { Product, StockMovement } from "@/lib/types";
 import { currency, formatDay } from "@/lib/format";
 
 type MovementRange = "day" | "week" | "month" | "year";
 
+interface UserActivitySummary {
+  id: string;
+  name: string;
+  totalActions: number;
+  totalQuantity: number;
+  totalValue: number;
+  categories: Array<{ name: string; quantity: number }>;
+  topProducts: Array<{ id: string; name: string; quantity: number }>;
+  firstScan: number | null;
+  lastScan: number | null;
+}
+
+interface DashboardUserOption {
+  id: string;
+  name: string;
+  searchTokens: string[];
+}
+
+function normalizeNameCandidate(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const normalized = trimmed
+    .split(/[.\-_/]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+  if (normalized) {
+    return normalized;
+  }
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function deriveUserDisplayName(rawName: string | null | undefined, userId: string) {
+  const tokens = new Set<string>();
+  const safeRaw = typeof rawName === "string" ? rawName.trim() : "";
+  if (safeRaw) {
+    tokens.add(safeRaw.toLowerCase());
+  }
+
+  let emailLocal = "";
+  if (safeRaw.includes("@")) {
+    emailLocal = safeRaw.split("@")[0] ?? "";
+    if (emailLocal) {
+      tokens.add(emailLocal.toLowerCase());
+    }
+  }
+
+  const candidates = [safeRaw, emailLocal].filter(Boolean);
+  let name = "";
+  for (const candidate of candidates) {
+    const normalized = normalizeNameCandidate(candidate);
+    if (normalized) {
+      name = normalized;
+      break;
+    }
+  }
+
+  if (!name) {
+    name = "Usuario";
+  }
+
+  tokens.add(name.toLowerCase());
+  if (userId) {
+    tokens.add(userId.toLowerCase());
+  }
+
+  return { name, tokens: Array.from(tokens) };
+}
+
 const BarTimeseries = dynamic(
   () => import("@/components/charts/bar-timeseries").then((mod) => mod.BarTimeseries),
   { ssr: false }
 );
-const Donut = dynamic(
-  () => import("@/components/charts/donut").then((mod) => mod.Donut),
+const Donut = dynamic(() => import("@/components/charts/donut").then((mod) => mod.Donut), { ssr: false });
+const UserComparisonChart = dynamic(
+  () => import("@/components/charts/user-comparison").then((mod) => mod.UserComparisonChart),
   { ssr: false }
 );
 
@@ -48,7 +122,6 @@ const MOVEMENT_RANGE_OPTIONS: { value: MovementRange; label: string }[] = [
   { value: "month", label: "Por mes (12 meses)" },
   { value: "year", label: "Por ano (5 anos)" }
 ];
-
 export default function DashboardPage() {
   return (
     <ProtectedRoute>
@@ -62,11 +135,17 @@ export default function DashboardPage() {
 function DashboardContent() {
   const [products, setProducts] = useState<Product[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [movementUsers, setMovementUsers] = useState<MovementUserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [supplierFilter, setSupplierFilter] = useState<string>("");
   const [productFilter, setProductFilter] = useState<string>("");
   const [movementRange, setMovementRange] = useState<MovementRange>("day");
+  const [userSearch, setUserSearch] = useState("");
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [userStartDate, setUserStartDate] = useState("");
+  const [userEndDate, setUserEndDate] = useState("");
+  const autoSelectedUsersRef = useRef(false);
 
   useEffect(() => {
     const load = async () => {
@@ -74,10 +153,21 @@ function DashboardContent() {
       try {
         const bundle = await ensureFirebase();
         const { firestore } = bundle;
-        const productsSnapshot = await firestore.getDocs(firestore.collection(bundle.db, "products"));
+        const productsRef = firestore.collection(bundle.db, "products");
+        const movementsRef = firestore.collection(bundle.db, "stockMovements");
+
+        const [productsSnapshot, movementsSnapshot, usersList] = await Promise.all([
+          firestore.getDocs(productsRef),
+          firestore.getDocs(movementsRef),
+          fetchMovementUsers().catch((userError) => {
+            console.error("Falha ao carregar usuarios do dashboard", userError);
+            return [] as MovementUserOption[];
+          })
+        ]);
+
         const loadedProducts: Product[] = productsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
         setProducts(loadedProducts);
-        const movementsSnapshot = await firestore.getDocs(firestore.collection(bundle.db, "stockMovements"));
+
         const loadedMovements: StockMovement[] = movementsSnapshot.docs.map((doc: any) => {
           const data = doc.data();
           const timestampValue =
@@ -91,6 +181,7 @@ function DashboardContent() {
           } as StockMovement;
         });
         setMovements(loadedMovements);
+        setMovementUsers(usersList);
       } catch (error) {
         console.error(error);
         toast.error("Falha ao carregar dados do Firestore");
@@ -140,6 +231,249 @@ function DashboardContent() {
     return movements.filter((movement) => productMap.has(movement.productId));
   }, [movements, productMap, categoryFilter, supplierFilter, productFilter]);
 
+  const movementsWithProducts = useMemo(
+    () =>
+      filteredMovements
+        .filter((movement) => movement.type === "out")
+        .map((movement) => ({
+          ...movement,
+          product: productMap.get(movement.productId)
+        })),
+    [filteredMovements, productMap]
+  );
+
+  const userDirectory = useMemo(() => {
+    const map = new Map<string, MovementUserOption>();
+    for (const user of movementUsers) {
+      map.set(user.id, user);
+    }
+    return map;
+  }, [movementUsers]);
+
+  useEffect(() => {
+    if (!movementsWithProducts.length) {
+      return;
+    }
+
+    if (selectedUserIds.length) {
+      autoSelectedUsersRef.current = true;
+      return;
+    }
+
+    if (autoSelectedUsersRef.current) {
+      return;
+    }
+
+    const uniqueIds: string[] = [];
+    for (const movement of movementsWithProducts) {
+      if (!uniqueIds.includes(movement.userId)) {
+        uniqueIds.push(movement.userId);
+      }
+    }
+
+    if (uniqueIds.length) {
+      setSelectedUserIds(uniqueIds.slice(0, 3));
+      autoSelectedUsersRef.current = true;
+    }
+  }, [movementsWithProducts, selectedUserIds]);
+
+  const userOptions = useMemo<DashboardUserOption[]>(() => {
+    const map = new Map<string, DashboardUserOption>();
+
+    for (const movement of movementsWithProducts) {
+      if (!movement.userId) {
+        continue;
+      }
+
+      const directoryUser = userDirectory.get(movement.userId);
+      const rawName = directoryUser?.name ?? (typeof movement.userName === "string" ? movement.userName : "");
+      const { name, tokens } = deriveUserDisplayName(rawName, movement.userId);
+      const tokenSet = new Set(tokens);
+
+      if (directoryUser?.email) {
+        tokenSet.add(directoryUser.email.toLowerCase());
+        const local = directoryUser.email.split("@")[0]?.toLowerCase();
+        if (local) {
+          tokenSet.add(local);
+        }
+      }
+      if (directoryUser?.name) {
+        tokenSet.add(directoryUser.name.toLowerCase());
+      }
+      if (typeof movement.userName === "string" && movement.userName.trim()) {
+        tokenSet.add(movement.userName.trim().toLowerCase());
+      }
+
+      const existing = map.get(movement.userId);
+      const mergedTokens = existing ? new Set(existing.searchTokens) : new Set<string>();
+      for (const token of tokenSet) {
+        mergedTokens.add(token);
+      }
+
+      let displayName = name;
+      if (existing) {
+        if (existing.name === "Usuario" && name !== "Usuario") {
+          displayName = name;
+        } else if (name === "Usuario") {
+          displayName = existing.name;
+        } else if (existing.name.length >= name.length) {
+          displayName = existing.name;
+        }
+      }
+
+      map.set(movement.userId, {
+        id: movement.userId,
+        name: displayName,
+        searchTokens: Array.from(mergedTokens)
+      });
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [movementsWithProducts, userDirectory]);
+
+  const filteredUserOptions = useMemo(() => {
+    if (!userSearch.trim()) {
+      return userOptions;
+    }
+    const term = userSearch.trim().toLowerCase();
+    return userOptions.filter((user) => user.searchTokens.some((token) => token.includes(term)));
+  }, [userOptions, userSearch]);
+
+  const selectedUsers = useMemo(() => {
+    const selectedSet = new Set(selectedUserIds);
+    return userOptions.filter((user) => selectedSet.has(user.id));
+  }, [userOptions, selectedUserIds]);
+
+  const userFilteredMovements = useMemo(() => {
+    const start = userStartDate ? new Date(`${userStartDate}T00:00:00`).getTime() : null;
+    const end = userEndDate ? new Date(`${userEndDate}T23:59:59.999`).getTime() : null;
+
+    if (!start && !end) {
+      return movementsWithProducts;
+    }
+
+    return movementsWithProducts.filter((movement) => {
+      const ts = Number(movement.timestamp ?? 0);
+      if (start && ts < start) {
+        return false;
+      }
+      if (end && ts > end) {
+        return false;
+      }
+      return true;
+    });
+  }, [movementsWithProducts, userStartDate, userEndDate]);
+
+  const userStats = useMemo<UserActivitySummary[]>(() => {
+    const summaries: UserActivitySummary[] = [];
+
+    for (const user of selectedUsers) {
+      const movementsForUser = userFilteredMovements.filter((movement) => movement.userId === user.id);
+
+      if (!movementsForUser.length) {
+        summaries.push({
+          id: user.id,
+          name: user.name,
+          totalActions: 0,
+          totalQuantity: 0,
+          totalValue: 0,
+          categories: [],
+          topProducts: [],
+          firstScan: null,
+          lastScan: null
+        });
+        continue;
+      }
+
+      let totalQuantity = 0;
+      let totalValue = 0;
+      let firstScan: number | null = null;
+      let lastScan: number | null = null;
+      const categoryTotals = new Map<string, number>();
+      const productTotals = new Map<string, { name: string; quantity: number }>();
+
+      for (const movement of movementsForUser) {
+        const movementQty = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+        const unitPrice = movement.product?.unitPrice ?? 0;
+        const categoryName = movement.product?.category ?? "Sem categoria";
+        const productName = movement.product?.name ?? movement.product?.sku ?? movement.sku ?? "Produto";
+
+        totalQuantity += movementQty;
+        totalValue += movementQty * unitPrice;
+
+        categoryTotals.set(categoryName, (categoryTotals.get(categoryName) ?? 0) + movementQty);
+
+        if (movement.product) {
+          const existing = productTotals.get(movement.product.id) ?? { name: productName, quantity: 0 };
+          existing.quantity += movementQty;
+          productTotals.set(movement.product.id, existing);
+        } else {
+          const fallbackKey = `${movement.sku}-${productName}`;
+          const existing = productTotals.get(fallbackKey) ?? { name: productName, quantity: 0 };
+          existing.quantity += movementQty;
+          productTotals.set(fallbackKey, existing);
+        }
+
+        if (typeof movement.timestamp === "number" && Number.isFinite(movement.timestamp)) {
+          if (!firstScan || movement.timestamp < firstScan) {
+            firstScan = movement.timestamp;
+          }
+          if (!lastScan || movement.timestamp > lastScan) {
+            lastScan = movement.timestamp;
+          }
+        }
+      }
+
+      const categories = Array.from(categoryTotals.entries())
+        .map(([name, quantity]) => ({ name, quantity }))
+        .sort((a, b) => b.quantity - a.quantity);
+
+      const topProducts = Array.from(productTotals.entries())
+        .map(([id, info]) => ({ id, name: info.name, quantity: info.quantity }))
+        .sort((a, b) => b.quantity - a.quantity);
+
+      summaries.push({
+        id: user.id,
+        name: user.name,
+        totalActions: movementsForUser.length,
+        totalQuantity,
+        totalValue,
+        categories,
+        topProducts,
+        firstScan,
+        lastScan
+      });
+    }
+
+    return summaries;
+  }, [selectedUsers, userFilteredMovements]);
+  const comparisonData = useMemo(
+    () =>
+      userStats
+        .filter((summary) => summary.totalQuantity > 0)
+        .map((summary) => ({
+          user: summary.name,
+          quantity: summary.totalQuantity,
+          totalActions: summary.totalActions,
+          totalValue: summary.totalValue
+        })),
+    [userStats]
+  );
+
+  const hasUserFilters = Boolean(userSearch.trim() || userStartDate || userEndDate || selectedUserIds.length);
+
+  const formatUserDate = (timestamp: number | null) => {
+    if (!timestamp) {
+      return "Sem registros";
+    }
+    try {
+      return format(new Date(timestamp), "dd/MM/yyyy HH:mm", { locale: ptBR });
+    } catch (error) {
+      console.error("Falha ao formatar data de usuario", error);
+      return "Sem registros";
+    }
+  };
+
   const totalItems = filteredProducts.reduce((acc, product) => acc + (product.quantity ?? 0), 0);
   const totalValue = filteredProducts.reduce((acc, product) => acc + (product.totalValue ?? 0), 0);
 
@@ -162,13 +496,6 @@ function DashboardContent() {
     month: startOfMonth(now).getTime(),
     year: startOfYear(now).getTime()
   };
-
-  const movementsWithProducts = filteredMovements
-    .filter((movement) => movement.type === "out")
-    .map((movement) => ({
-      ...movement,
-      product: productMap.get(movement.productId)
-    }));
 
   const windowStats = (start: number) => {
     const relevant = movementsWithProducts.filter((movement) => movement.timestamp >= start);
@@ -269,8 +596,25 @@ function DashboardContent() {
   );
 
   const movementRangeLabel = MOVEMENT_RANGE_OPTIONS.find((option) => option.value === movementRange)?.label ?? "";
-  const hasActiveFilters = Boolean(categoryFilter || supplierFilter || productFilter) || movementRange !== "day";
+  const hasActiveFilters =
+    Boolean(categoryFilter || supplierFilter || productFilter || hasUserFilters) || movementRange !== "day";
 
+  const handleToggleUser = (userId: string) => {
+    setSelectedUserIds((prev) => {
+      if (prev.includes(userId)) {
+        return prev.filter((id) => id !== userId);
+      }
+      return [...prev, userId];
+    });
+  };
+
+  const handleClearUserFilters = (preventAutoSelection = false) => {
+    autoSelectedUsersRef.current = preventAutoSelection ? true : false;
+    setSelectedUserIds([]);
+    setUserSearch("");
+    setUserStartDate("");
+    setUserEndDate("");
+  };
   return (
     <div className="space-y-8">
       <header>
@@ -292,6 +636,7 @@ function DashboardContent() {
                 setSupplierFilter("");
                 setProductFilter("");
                 setMovementRange("day");
+                handleClearUserFilters(false);
               }}
               disabled={!hasActiveFilters}
             >
@@ -378,6 +723,234 @@ function DashboardContent() {
         <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando metricas...</div>
       ) : (
         <>
+          {userOptions.length ? (
+            <section className="grid gap-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">Atividade por usuario</h2>
+                    <p className="text-sm text-slate-500">
+                      Pesquise usuarios para ver quantas saidas foram bipadas, categorias mais frequentes e produtos
+                      destacados no periodo escolhido.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="self-start rounded-lg px-3 text-sm"
+                    onClick={() => handleClearUserFilters(true)}
+                    disabled={!hasUserFilters}
+                  >
+                    Limpar selecao
+                  </Button>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-[2fr,1fr]">
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label
+                          htmlFor="dashboard-user-search"
+                          className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                        >
+                          Buscar usuario
+                        </Label>
+                        <Input
+                          id="dashboard-user-search"
+                          placeholder="Nome ou ID"
+                          value={userSearch}
+                          onChange={(event) => setUserSearch(event.target.value)}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label
+                            htmlFor="dashboard-user-start"
+                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                          >
+                            Data inicial
+                          </Label>
+                          <Input
+                            id="dashboard-user-start"
+                            type="date"
+                            value={userStartDate}
+                            onChange={(event) => setUserStartDate(event.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label
+                            htmlFor="dashboard-user-end"
+                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                          >
+                            Data final
+                          </Label>
+                          <Input
+                            id="dashboard-user-end"
+                            type="date"
+                            value={userEndDate}
+                            min={userStartDate || undefined}
+                            onChange={(event) => setUserEndDate(event.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Usuarios selecionados</p>
+                      {selectedUsers.length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedUsers.map((user) => (
+                            <span
+                              key={user.id}
+                              className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700"
+                            >
+                              <span className="font-medium">{user.name}</span>
+                              <button
+                                type="button"
+                                className="text-xs font-semibold text-slate-500 transition hover:text-slate-900"
+                                onClick={() => handleToggleUser(user.id)}
+                              >
+                                remover
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">Escolha um ou mais usuarios na lista ao lado.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Usuarios disponiveis</p>
+                    <div className="grid max-h-48 gap-2 overflow-y-auto pr-1">
+                      {filteredUserOptions.map((user) => {
+                        const active = selectedUserIds.includes(user.id);
+                        return (
+                          <Button
+                            key={user.id}
+                            type="button"
+                            variant="outline"
+                            className={`justify-start text-left ${
+                              active ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-900" : ""
+                            }`}
+                            onClick={() => handleToggleUser(user.id)}
+                            title={user.name}
+                          >
+                            <span className="text-sm font-semibold text-current">{user.name}</span>
+                          </Button>
+                        );
+                      })}
+                      {!filteredUserOptions.length ? (
+                        <p className="text-sm text-slate-500">Nenhum usuario encontrado.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {comparisonData.length ? (
+                <UserComparisonChart data={comparisonData} title="Comparativo de saidas por usuario" />
+              ) : null}
+              {selectedUsers.length ? (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {userStats.map((summary) => {
+                    const topCategories = summary.categories.slice(0, 3);
+                    const topProducts = summary.topProducts.slice(0, 3);
+                    const hasActivity = summary.totalActions > 0;
+
+                    return (
+                      <div
+                        key={summary.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Usuario</p>
+                            <h3 className="text-lg font-semibold text-slate-900">{summary.name}</h3>
+                            <p className="text-xs text-slate-500">
+                              {summary.totalActions.toLocaleString("pt-BR")} movimentacoes registradas
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Quantidade</p>
+                            <p className="text-2xl font-bold text-slate-900">
+                              {summary.totalQuantity.toLocaleString("pt-BR")}
+                            </p>
+                          </div>
+                        </div>
+
+                        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <dt className="text-xs uppercase tracking-wide text-slate-500">Valor movimentado</dt>
+                            <dd className="font-semibold text-slate-900">{currency(summary.totalValue)}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs uppercase tracking-wide text-slate-500">Ultima saida</dt>
+                            <dd className="font-semibold text-slate-900">{formatUserDate(summary.lastScan)}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs uppercase tracking-wide text-slate-500">Primeira saida</dt>
+                            <dd className="font-semibold text-slate-900">{formatUserDate(summary.firstScan)}</dd>
+                          </div>
+                        </dl>
+
+                        {hasActivity ? (
+                          <div className="mt-4 space-y-3">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Categorias principais
+                              </p>
+                              <ul className="mt-2 space-y-1 text-sm">
+                                {topCategories.map((category) => (
+                                  <li
+                                    key={`${summary.id}-${category.name}`}
+                                    className="flex items-center justify-between text-slate-600"
+                                  >
+                                    <span>{category.name}</span>
+                                    <span className="font-semibold text-slate-900">
+                                      {category.quantity.toLocaleString("pt-BR")} itens
+                                    </span>
+                                  </li>
+                                ))}
+                                {!topCategories.length ? (
+                                  <li className="text-sm text-slate-500">Sem categorias para este periodo.</li>
+                                ) : null}
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Produtos mais bipados
+                              </p>
+                              <ul className="mt-2 space-y-1 text-sm">
+                                {topProducts.map((product) => (
+                                  <li
+                                    key={`${summary.id}-${product.id}`}
+                                    className="flex items-center justify-between text-slate-600"
+                                  >
+                                    <span className="truncate pr-2">{product.name}</span>
+                                    <span className="font-semibold text-slate-900">
+                                      {product.quantity.toLocaleString("pt-BR")} itens
+                                    </span>
+                                  </li>
+                                ))}
+                                {!topProducts.length ? (
+                                  <li className="text-sm text-slate-500">Sem produtos destacados no periodo.</li>
+                                ) : null}
+                              </ul>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-4 text-sm text-slate-500">
+                            Sem movimentacoes para este usuario no periodo selecionado.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <StatsCard label="Itens em estoque" value={totalItems.toLocaleString("pt-BR")} />
             <StatsCard label="Valor em estoque" value={currency(totalValue)} />
@@ -426,16 +999,3 @@ function DashboardContent() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
