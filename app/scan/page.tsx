@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/components/providers/auth-provider";
-import { getProductBySku, processStockOut } from "@/lib/firestore";
-import type { Product } from "@/lib/types";
+import { processStockOut, resolveSkuToParentAndMultiplier } from "@/lib/firestore";
+import type { Product, ProductKit } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 
 export default function ScanPage() {
@@ -32,7 +32,13 @@ function ScanContent() {
   const [quantity, setQuantity] = useState("1");
   const [processing, setProcessing] = useState(false);
   const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
+  // KIT-SKU START
+  const [previewKit, setPreviewKit] = useState<ProductKit | null>(null);
   const [processedProduct, setProcessedProduct] = useState<Product | null>(null);
+  const [processedKit, setProcessedKit] = useState<ProductKit | null>(null);
+  const [lastEffectiveQty, setLastEffectiveQty] = useState<number | null>(null);
+  const [lastScannedSku, setLastScannedSku] = useState<string | null>(null);
+  // KIT-SKU END
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
@@ -118,7 +124,7 @@ function ScanContent() {
       setProcessing(true);
 
       try {
-        const { product } = await processStockOut({
+        const { product, kit: resultKit, effectiveQty, scannedSku } = await processStockOut({
           sku: targetSku,
           qty: qtyValue,
           userId: user.uid,
@@ -126,10 +132,19 @@ function ScanContent() {
         });
 
         setProcessedProduct(product);
+        setProcessedKit(resultKit);
+        setLastEffectiveQty(effectiveQty);
+        setLastScannedSku(scannedSku);
         setPreviewProduct(null);
+        setPreviewKit(null);
         setPreviewLoading(false);
         playSuccessTone();
-        toast.success("Baixa realizada.");
+        const kitName = resultKit?.label && resultKit.label.trim().length ? resultKit.label : resultKit?.sku;
+        if (resultKit) {
+          toast.success(`Kit ${kitName ?? product.sku} baixou ${effectiveQty} unidade(s).`);
+        } else {
+          toast.success(`Baixa de ${effectiveQty} unidade(s).`);
+        }
         setSku("");
         setQuantity("1");
         skuInputRef.current?.focus();
@@ -182,6 +197,7 @@ function ScanContent() {
     const trimmed = sku.trim();
     if (!trimmed) {
       setPreviewProduct(null);
+      setPreviewKit(null);
       setPreviewLoading(false);
       return;
     }
@@ -190,9 +206,10 @@ function ScanContent() {
     const timeout = window.setTimeout(async () => {
       setPreviewLoading(true);
       try {
-        const product = await getProductBySku(trimmed);
+        const resolved = await resolveSkuToParentAndMultiplier(trimmed);
         if (!cancelled) {
-          setPreviewProduct(product);
+          setPreviewProduct(resolved?.product ?? null);
+          setPreviewKit(resolved?.kit ?? null);
         }
       } finally {
         if (!cancelled) {
@@ -209,14 +226,21 @@ function ScanContent() {
 
   const productDetails = useMemo(() => {
     const trimmedSku = sku.trim();
-    const product = previewProduct ?? (trimmedSku ? null : processedProduct);
+    const isPreview = Boolean(trimmedSku);
+    const product = (isPreview ? previewProduct : processedProduct) ?? null;
     if (!product) return null;
+
+    const kit = isPreview ? previewKit : processedKit;
+    const scannedValue = isPreview ? trimmedSku : lastScannedSku ?? product.sku;
+    const effectiveQtyDisplay = !isPreview && lastEffectiveQty ? lastEffectiveQty : null;
+    const kitLabel = kit?.label && kit.label.trim().length ? kit.label : kit?.sku;
+
     return (
       <div className="card space-y-2">
         <h3 className="text-lg font-semibold text-slate-900">{product.name}</h3>
         <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
           <div>
-            <span className="font-medium text-slate-500">SKU:</span> {product.sku}
+            <span className="font-medium text-slate-500">SKU pai:</span> {product.sku}
           </div>
           <div>
             <span className="font-medium text-slate-500">Preco:</span> {formatCurrency(product.unitPrice)}
@@ -233,10 +257,28 @@ function ScanContent() {
           <div>
             <span className="font-medium text-slate-500">Valor total:</span> {formatCurrency(product.totalValue)}
           </div>
+          <div>
+            <span className="font-medium text-slate-500">SKU escaneado:</span> {scannedValue || "-"}
+          </div>
+          {kit ? (
+            <>
+              <div>
+                <span className="font-medium text-slate-500">Multiplicador:</span> x{kit.multiplier}
+              </div>
+              <div className="sm:col-span-2">
+                <span className="font-medium text-slate-500">Kit:</span> {kitLabel}
+              </div>
+            </>
+          ) : null}
+          {!isPreview && effectiveQtyDisplay ? (
+            <div className="sm:col-span-2">
+              <span className="font-medium text-slate-500">Ultima baixa:</span> {effectiveQtyDisplay} unidade(s)
+            </div>
+          ) : null}
         </div>
       </div>
     );
-  }, [previewProduct, processedProduct, sku]);
+  }, [lastEffectiveQty, lastScannedSku, previewKit, previewProduct, processedKit, processedProduct, sku]);
 
   return (
     <div className="space-y-8">
@@ -283,3 +325,11 @@ function ScanContent() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
