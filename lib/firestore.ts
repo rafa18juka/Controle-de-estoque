@@ -1,4 +1,4 @@
-import type { Product, StockMovement } from "./types";
+﻿import type { Product, StockMovement } from "./types";
 import { ensureFirebase } from "./firebase-client";
 
 export interface StockOutInput {
@@ -107,7 +107,8 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
       category: data.category,
       supplier: data.supplier,
       quantity: newQuantity,
-      totalValue: newTotalValue
+      totalValue: newTotalValue,
+      estoqueMinimo: typeof data.estoqueMinimo === "number" ? data.estoqueMinimo : undefined
     } as Product;
   });
 

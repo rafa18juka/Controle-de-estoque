@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "staff";
+﻿export type UserRole = "admin" | "staff";
 
 export interface AppUser {
   uid: string;
@@ -16,6 +16,7 @@ export interface Product {
   supplier?: string;
   quantity: number;
   totalValue: number;
+  estoqueMinimo?: number;
 }
 
 export interface StockMovement {
