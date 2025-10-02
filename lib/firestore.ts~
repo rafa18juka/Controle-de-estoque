@@ -140,6 +140,22 @@ export async function getProductBySku(sku: string): Promise<Product | null> {
   return resolved ? resolved.product : null;
 }
 
+
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const productsRef = firestore.collection(db, "products");
+  const query = firestore.query(productsRef, firestore.where("sku", "==", sanitized), firestore.limit(1));
+  const snapshot = await firestore.getDocs(query);
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const doc = snapshot.docs[0];
+  const data = doc.data();
+  return { id: doc.id, ...data } as Product;
+}
+
 export async function processStockOut(input: StockOutInput): Promise<StockOutResult> {
   const { sku, qty, userId, userName } = input;
   if (!userId) {
