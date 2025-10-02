@@ -1,4 +1,4 @@
-rules_version = '2';
+﻿rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function userDoc(uid) {
@@ -24,13 +24,19 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow read: if isSignedIn();
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin();
       allow update: if isStaff() &&
-        request.resource.data.keys().hasOnly(['quantity', 'totalValue']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['quantity', 'totalValue']) &&
+        request.resource.data.diff(resource.data).removedKeys().hasOnly([]) &&
+        request.resource.data.diff(resource.data).addedKeys().hasOnly([]) &&
         request.resource.data.quantity is number &&
         request.resource.data.quantity >= 0 &&
         request.resource.data.quantity <= resource.data.quantity &&
-        request.resource.data.totalValue == request.resource.data.quantity * resource.data.unitPrice;
+        math.abs(
+          request.resource.data.totalValue -
+          (request.resource.data.quantity * resource.data.unitPrice)
+        ) <= 0.01;
     }
 
     match /stockMovements/{movementId} {
