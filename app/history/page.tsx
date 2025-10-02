@@ -154,12 +154,14 @@ function HistoryContent() {
         return;
       }
 
-      const header = ["Data/Hora", "SKU", "Produto", "Quantidade", "Usuario"];
+      const header = ["Data/Hora", "SKU pai", "SKU escaneado", "Produto", "Quantidade", "Multiplicador", "Usuario"];
       const rows = data.map((movement) => [
         formatDateTime(movement.timestamp),
         movement.sku,
+        movement.scannedSku ?? movement.sku,
         movement.productName || "",
         String(movement.qty > 0 ? -Math.abs(movement.qty) : movement.qty),
+        String(movement.multiplier ?? 1),
         movement.userName || movement.userId
       ]);
 
@@ -282,35 +284,50 @@ function HistoryContent() {
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Data/Hora</th>
-                <th className="px-4 py-3">SKU</th>
+                <th className="px-4 py-3">SKU pai</th>
+                <th className="px-4 py-3">SKU escaneado</th>
                 <th className="px-4 py-3">Produto</th>
                 <th className="px-4 py-3">Quantidade (-)</th>
+                <th className="px-4 py-3">Multiplicador</th>
                 <th className="px-4 py-3">Usuario</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading && movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan={5}>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={7}>
                     Carregando historico...
                   </td>
                 </tr>
               ) : movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-400" colSpan={5}>
+                  <td className="px-4 py-6 text-center text-slate-400" colSpan={7}>
                     Nenhum movimento encontrado para o filtro atual.
                   </td>
                 </tr>
               ) : (
-                movements.map((movement) => (
-                  <tr key={`${movement.id}-${movement.timestamp}`} className="text-slate-700">
-                    <td className="px-4 py-3 whitespace-nowrap">{formatDateTime(movement.timestamp)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap font-mono text-xs uppercase">{movement.sku}</td>
-                    <td className="px-4 py-3">{movement.productName || "-"}</td>
-                    <td className="px-4 py-3 font-semibold text-rose-600">-{Math.abs(movement.qty)}</td>
-                    <td className="px-4 py-3">{movement.userName || movement.userId}</td>
-                  </tr>
-                ))
+                movements.map((movement) => {
+                  const scannedSku = movement.scannedSku ?? movement.sku;
+                  const isKit = Boolean(movement.scannedSku && movement.scannedSku !== movement.sku);
+                  const multiplierValue = Number(movement.multiplier ?? 1);
+                  const multiplierDisplay = isKit || multiplierValue !== 1 ? `x${multiplierValue}` : "-";
+                  return (
+                    <tr key={`${movement.id}-${movement.timestamp}`} className="text-slate-700">
+                      <td className="px-4 py-3 whitespace-nowrap">{formatDateTime(movement.timestamp)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap font-mono text-xs uppercase">{movement.sku}</td>
+                      <td
+                        className="px-4 py-3 whitespace-nowrap font-mono text-xs uppercase"
+                        title={isKit ? "SKU de kit escaneado" : undefined}
+                      >
+                        {scannedSku}
+                      </td>
+                      <td className="px-4 py-3">{movement.productName || "-"}</td>
+                      <td className="px-4 py-3 font-semibold text-rose-600">-{Math.abs(movement.qty)}</td>
+                      <td className="px-4 py-3">{multiplierDisplay}</td>
+                      <td className="px-4 py-3">{movement.userName || movement.userId}</td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -395,3 +412,12 @@ function csvEscape(value: string) {
   const safe = value.replace(/"/g, '""');
   return `"${safe}"`;
 }
+
+
+
+
+
+
+
+
+
