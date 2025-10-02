@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
@@ -10,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import {
+  deleteStockMovement,
   fetchMovementUsers,
   fetchStockMovements,
   fetchStockMovementsForExport,
@@ -56,6 +58,7 @@ function HistoryContent() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -137,6 +140,38 @@ function HistoryContent() {
     if (!hasMore || loading || loadingMore) return;
     void loadMovements(false, cursor);
   };
+
+  const handleDeleteMovement = useCallback(
+    async (movementId: string) => {
+      const target = movements.find((movement) => movement.id === movementId);
+      const skuLabel = target?.scannedSku ?? target?.sku ?? "";
+      const nameLabel = target?.productName ? ` (${target.productName})` : "";
+      const confirmationMessage =
+        skuLabel
+          ? `Deseja excluir o registro do SKU ${skuLabel}${nameLabel}? Essa acao devolve o estoque.`
+          : "Deseja excluir este registro do historico? Essa acao devolve o estoque.";
+
+      if (typeof window !== "undefined") {
+        const confirmed = window.confirm(confirmationMessage);
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      setDeletingId(movementId);
+      try {
+        await deleteStockMovement(movementId);
+        setMovements((prev) => prev.filter((movement) => movement.id !== movementId));
+        toast.success("Registro excluido com sucesso.");
+      } catch (error) {
+        console.error("Falha ao excluir movimento", error);
+        toast.error("Nao foi possivel excluir o registro.");
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [movements]
+  );
 
   const handleExport = async () => {
     if (exporting) return;
@@ -290,18 +325,19 @@ function HistoryContent() {
                 <th className="px-4 py-3">Quantidade (-)</th>
                 <th className="px-4 py-3">Multiplicador</th>
                 <th className="px-4 py-3">Usuario</th>
+                <th className="px-4 py-3 text-right">Acoes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading && movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan={7}>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={8}>
                     Carregando historico...
                   </td>
                 </tr>
               ) : movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-400" colSpan={7}>
+                  <td className="px-4 py-6 text-center text-slate-400" colSpan={8}>
                     Nenhum movimento encontrado para o filtro atual.
                   </td>
                 </tr>
@@ -325,6 +361,19 @@ function HistoryContent() {
                       <td className="px-4 py-3 font-semibold text-rose-600">-{Math.abs(movement.qty)}</td>
                       <td className="px-4 py-3">{multiplierDisplay}</td>
                       <td className="px-4 py-3">{movement.userName || movement.userId}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="text-rose-500 hover:text-rose-600"
+                          onClick={() => handleDeleteMovement(movement.id)}
+                          disabled={deletingId === movement.id}
+                          aria-label="Excluir registro"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </td>
                     </tr>
                   );
                 })
