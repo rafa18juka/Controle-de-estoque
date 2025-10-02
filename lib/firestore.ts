@@ -321,13 +321,17 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
       : Number(data.timestamp ?? 0);
     return {
       id: doc.id,
-      productId: data.productId,
-      sku: data.sku,
-      qty: data.qty,
-      type: data.type,
-      userId: data.userId,
-      userName: data.userName,
-      timestamp: timestampValue
+      productId: typeof data.productId === "string" ? data.productId : "",
+      sku: typeof data.sku === "string" ? data.sku : "",
+      qty: Number(data.qty ?? 0),
+      type: typeof data.type === "string" ? data.type : "out",
+      userId: typeof data.userId === "string" ? data.userId : "",
+      userName: typeof data.userName === "string" ? data.userName : "",
+      timestamp: timestampValue,
+      parentSku: typeof data.parentSku === "string" ? data.parentSku : undefined,
+      scannedSku: typeof data.scannedSku === "string" ? data.scannedSku : undefined,
+      multiplier: typeof data.multiplier === "number" ? data.multiplier : undefined,
+      effectiveQty: typeof data.effectiveQty === "number" ? data.effectiveQty : undefined
     };
   });
 
@@ -349,6 +353,55 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
   const nextCursor = snapshot.docs.length === pageLimit ? snapshot.docs[snapshot.docs.length - 1] : null;
 
   return { movements: enriched, nextCursor };
+}
+
+export async function deleteStockMovement(movementId: string): Promise<void> {
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const movementRef = firestore.doc(db, "stockMovements", movementId);
+
+  await firestore.runTransaction(db, async (transaction: any) => {
+    const snapshot = await transaction.get(movementRef);
+    if (!snapshot.exists()) {
+      throw new Error("Movimento nao encontrado.");
+    }
+
+    const data = snapshot.data();
+    const productId = typeof data.productId === "string" ? data.productId : "";
+    const rawQty = data.effectiveQty ?? data.qty ?? 0;
+    const movementQty = Number(rawQty);
+    const movementType = typeof data.type === "string" ? data.type : "out";
+
+    if (productId && Number.isFinite(movementQty) && movementQty > 0) {
+      const productRef = firestore.doc(db, "products", productId);
+      const productSnapshot = await transaction.get(productRef);
+      if (productSnapshot.exists()) {
+        const productData = productSnapshot.data();
+        const currentQuantity = Number(productData.quantity ?? 0);
+        const unitPrice = Number(productData.unitPrice ?? 0);
+
+        let newQuantity = currentQuantity;
+
+        if (movementType === "out") {
+          newQuantity = currentQuantity + movementQty;
+        } else if (movementType === "in") {
+          newQuantity = currentQuantity - movementQty;
+          if (newQuantity < 0) {
+            newQuantity = 0;
+          }
+        }
+
+        const newTotalValue = Number((newQuantity * unitPrice).toFixed(2));
+
+        transaction.update(productRef, {
+          quantity: newQuantity,
+          totalValue: newTotalValue
+        });
+      }
+    }
+
+    transaction.delete(movementRef);
+  });
 }
 
 export async function fetchStockMovementsForExport(
