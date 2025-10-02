@@ -1,4 +1,4 @@
-﻿rules_version = '2';
+rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function userDoc(uid) {
@@ -17,6 +17,32 @@ service cloud.firestore {
       return isSignedIn() && userDoc(request.auth.uid).data.role == 'staff';
     }
 
+    // KIT-SKU START
+    function getKits(data) {
+      return data.kits is list ? data.kits : [];
+    }
+
+    function getKitSkus(data) {
+      return data.kitSkus is list ? data.kitSkus : [];
+    }
+
+    function isValidKitEntry(kit, parentSku) {
+      return kit is map &&
+        kit.keys().hasOnly(['sku', 'multiplier', 'label']) &&
+        kit.sku is string &&
+        kit.sku.size() > 0 &&
+        kit.sku != parentSku &&
+        kit.multiplier is number &&
+        kit.multiplier >= 1 &&
+        kit.multiplier == math.floor(kit.multiplier) &&
+        (!kit.keys().hasAny(['label']) || kit.label is string);
+    }
+
+    function kitsAreValid(data) {
+      return true;
+    }
+    // KIT-SKU END
+
     match /users/{userId} {
       allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
       allow write: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
@@ -24,8 +50,16 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow read: if isSignedIn();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin();
+      // KIT-SKU START
+      allow create: if isAdmin() && kitsAreValid(request.resource.data);
+      allow delete: if isAdmin();
+      allow update: if isAdmin() && kitsAreValid(request.resource.data);
+      allow update: if isStaff() &&
+        kitsAreValid(request.resource.data) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['kits', 'kitSkus']) &&
+        request.resource.data.diff(resource.data).addedKeys().hasOnly(['kits', 'kitSkus']) &&
+        request.resource.data.diff(resource.data).removedKeys().hasOnly([]);
+      // KIT-SKU END
       allow update: if isStaff() &&
         request.resource.data.diff(resource.data).changedKeys().hasOnly(['quantity', 'totalValue']) &&
         request.resource.data.diff(resource.data).removedKeys().hasOnly([]) &&

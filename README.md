@@ -42,6 +42,7 @@ Aplicação web em Next.js 14 (App Router) para controle de estoque do e-commerc
    | `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Bucket de storage |
    | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Sender ID |
    | `NEXT_PUBLIC_FIREBASE_APP_ID` | App ID |
+| `NEXT_PUBLIC_ENABLE_KIT_SKU` | Flag para habilitar os kits de SKU (`true`/`false`) |
 
 3. Publique as regras do Firestore contidas em `firestore.rules`:
 
@@ -120,6 +121,7 @@ A aplicação ficará disponível em `http://localhost:3000`.
    - NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
    - NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
    - NEXT_PUBLIC_FIREBASE_APP_ID
+- NEXT_PUBLIC_ENABLE_KIT_SKU (opcional; default `false`)
 3. Habilite os domínios de autenticação do Firebase para cada ambiente (Auth > Configurações > Domínios autorizados):
    1. Adicione localhost para uso local com HTTPS.
    2. Inclua o domínio padrão dos previews da Vercel (*.vercel.app).
