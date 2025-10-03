@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useMemo } from "react";
+import type { ReactNode } from "react";
 import type { TooltipProps } from "recharts";
 import {
   Cell,
@@ -37,10 +38,13 @@ interface DonutProps {
   data: DonutDatum[];
   title: string;
   className?: string;
+  formatValue?: (value: number) => string;
+  headerActions?: ReactNode;
 }
 
-export function Donut({ data, title, className }: DonutProps) {
+export function Donut({ data, title, className, formatValue, headerActions }: DonutProps) {
   const chartId = useId();
+  const formatValueFn = formatValue ?? currency;
 
   const preparedData = useMemo(() => data.filter((item) => item.value > 0), [data]);
   const total = useMemo(
@@ -62,7 +66,7 @@ export function Donut({ data, title, className }: DonutProps) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
         <p className="text-xs text-slate-500">{name}</p>
-        <p className="text-sm font-semibold text-slate-900">{currency(value)}</p>
+        <p className="text-sm font-semibold text-slate-900">{formatValueFn(value)}</p>
       </div>
     );
   };
@@ -80,7 +84,7 @@ export function Donut({ data, title, className }: DonutProps) {
         dominantBaseline="middle"
         className="fill-slate-900 text-sm font-semibold"
       >
-        {currency(total)}
+        {formatValueFn(total)}
       </text>
     );
   };
@@ -88,7 +92,10 @@ export function Donut({ data, title, className }: DonutProps) {
   return (
     <div className={cn("rounded-2xl bg-white p-6 shadow-sm", className)}>
       <header className="mb-4">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+        <div className={cn("flex items-start justify-between gap-3", headerActions && "flex-col sm:flex-row sm:items-center sm:justify-between")}>
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+          {headerActions ? <div className="flex-shrink-0">{headerActions}</div> : null}
+        </div>
       </header>
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
@@ -118,7 +125,14 @@ export function Donut({ data, title, className }: DonutProps) {
               align="center"
               iconType="circle"
               iconSize={10}
-              wrapperStyle={{ color: "#475569" }}
+              wrapperStyle={{
+                color: "#475569",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 12,
+                justifyContent: "center",
+                paddingTop: 12
+              }}
             />
           </PieChart>
         </ResponsiveContainer>
