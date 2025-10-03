@@ -34,6 +34,7 @@ import type { Product, StockMovement } from "@/lib/types";
 import { currency, formatDay } from "@/lib/format";
 
 type MovementRange = "day" | "week" | "month" | "year";
+type ProductDonutMetric = "value" | "quantity" | "sales";
 
 interface UserActivitySummary {
   id: string;
@@ -51,6 +52,13 @@ interface DashboardUserOption {
   id: string;
   name: string;
   searchTokens: string[];
+}
+
+interface ProductSalesAggregate {
+  name: string;
+  totalValue: number;
+  totalQuantity: number;
+  saleCount: number;
 }
 
 function normalizeNameCandidate(value: string) {
@@ -116,6 +124,16 @@ const UserComparisonChart = dynamic(
   { ssr: false }
 );
 
+// Keep supplier donut legend compact when many fornecedores.
+const SUPPLIER_DONUT_MAX_SLICES = 8;
+const PRODUCT_DONUT_MAX_SLICES = 8;
+
+const PRODUCT_METRIC_OPTIONS: { value: ProductDonutMetric; label: string }[] = [
+  { value: "value", label: "Por valor" },
+  { value: "quantity", label: "Por unidades" },
+  { value: "sales", label: "Por vendas" }
+];
+
 const MOVEMENT_RANGE_OPTIONS: { value: MovementRange; label: string }[] = [
   { value: "day", label: "Por dia (30 dias)" },
   { value: "week", label: "Por semana (12 semanas)" },
@@ -141,6 +159,7 @@ function DashboardContent() {
   const [supplierFilter, setSupplierFilter] = useState<string>("");
   const [productFilter, setProductFilter] = useState<string>("");
   const [movementRange, setMovementRange] = useState<MovementRange>("day");
+  const [productDonutMetric, setProductDonutMetric] = useState<ProductDonutMetric>("value");
   const [userSearch, setUserSearch] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [userStartDate, setUserStartDate] = useState("");
@@ -241,6 +260,42 @@ function DashboardContent() {
         })),
     [filteredMovements, productMap]
   );
+
+  const productSalesAggregates = useMemo<ProductSalesAggregate[]>(() => {
+    if (!movementsWithProducts.length) {
+      return [];
+    }
+
+    const totals = new Map<string, ProductSalesAggregate>();
+
+    for (const movement of movementsWithProducts) {
+      const rawQty = Number(movement.effectiveQty ?? movement.qty ?? 0);
+      const quantity = Number.isFinite(rawQty) ? Math.abs(rawQty) : 0;
+      const unitPrice = movement.product?.unitPrice ?? 0;
+      const value = quantity * unitPrice;
+      const productName = (movement.product?.name?.trim() || movement.product?.sku || movement.sku || movement.productId || "Sem produto");
+      const productKey = movement.product?.id || movement.productId || movement.sku || productName;
+
+      const existing = totals.get(productKey) ?? {
+        name: productName,
+        totalValue: 0,
+        totalQuantity: 0,
+        saleCount: 0
+      };
+
+      if (!existing.name || existing.name === "Sem produto") {
+        existing.name = productName;
+      }
+
+      existing.totalQuantity += quantity;
+      existing.totalValue += value;
+      existing.saleCount += 1;
+
+      totals.set(productKey, existing);
+    }
+
+    return Array.from(totals.values());
+  }, [movementsWithProducts]);
 
   const userDirectory = useMemo(() => {
     const map = new Map<string, MovementUserOption>();
@@ -587,12 +642,103 @@ function DashboardContent() {
     [valueByCategory]
   );
 
-  const supplierDonutData = useMemo(
-    () =>
-      Object.entries(valueBySupplier)
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value),
-    [valueBySupplier]
+  const supplierDonutData = useMemo(() => {
+    const entries = Object.entries(valueBySupplier)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    if (entries.length <= SUPPLIER_DONUT_MAX_SLICES) {
+      return entries;
+    }
+
+    const limit = Math.max(SUPPLIER_DONUT_MAX_SLICES - 1, 1);
+    const topSuppliers = entries.slice(0, limit);
+    const remaining = entries.slice(limit);
+    const othersTotal = remaining.reduce((accumulator, item) => accumulator + item.value, 0);
+
+    if (othersTotal <= 0) {
+      return topSuppliers;
+    }
+
+    return [
+      ...topSuppliers,
+      {
+        name: `Outros (+${remaining.length})`,
+        value: othersTotal
+      }
+    ];
+  }, [valueBySupplier]);
+
+  const productDonutData = useMemo(() => {
+    if (!productSalesAggregates.length) {
+      return [];
+    }
+
+    const entries = productSalesAggregates
+      .map((aggregate) => {
+        const metricValue =
+          productDonutMetric === "value"
+            ? aggregate.totalValue
+            : productDonutMetric === "quantity"
+            ? aggregate.totalQuantity
+            : aggregate.saleCount;
+
+        return {
+          name: aggregate.name,
+          value: metricValue
+        };
+      })
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    if (entries.length <= PRODUCT_DONUT_MAX_SLICES) {
+      return entries;
+    }
+
+    const limit = Math.max(PRODUCT_DONUT_MAX_SLICES - 1, 1);
+    const topProducts = entries.slice(0, limit);
+    const remaining = entries.slice(limit);
+    const othersTotal = remaining.reduce((accumulator, item) => accumulator + item.value, 0);
+
+    if (othersTotal <= 0) {
+      return topProducts;
+    }
+
+    return [
+      ...topProducts,
+      {
+        name: `Outros (+${remaining.length})`,
+        value: othersTotal
+      }
+    ];
+  }, [productSalesAggregates, productDonutMetric]);
+
+  const productDonutValueFormatter = useMemo(() => {
+    if (productDonutMetric === "quantity") {
+      return (value: number) => `${value.toLocaleString("pt-BR")} un`;
+    }
+
+    if (productDonutMetric === "sales") {
+      return (value: number) => `${value.toLocaleString("pt-BR")} vendas`;
+    }
+
+    return currency;
+  }, [productDonutMetric]);
+
+  const renderProductMetricSelector = () => (
+    <Select
+      id="dashboard-product-metric"
+      value={productDonutMetric}
+      onChange={(event) => setProductDonutMetric(event.target.value as ProductDonutMetric)}
+      aria-label="Metrica dos produtos"
+      className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+    >
+      {PRODUCT_METRIC_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </Select>
   );
 
   const movementRangeLabel = MOVEMENT_RANGE_OPTIONS.find((option) => option.value === movementRange)?.label ?? "";
@@ -723,6 +869,21 @@ function DashboardContent() {
         <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando metricas...</div>
       ) : (
         <>
+          <section className="grid gap-4">
+            {movementSeries.length ? (
+              <BarTimeseries
+                data={movementSeries}
+                title={`Saidas ${movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}`}
+              />
+            ) : (
+              <div className="rounded-2xl bg-white p-6 shadow-sm">
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Saidas {movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}
+                </h3>
+                <p className="text-sm text-slate-500">Sem movimentacoes para o periodo selecionado.</p>
+              </div>
+            )}
+          </section>
           {userOptions.length ? (
             <section className="grid gap-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -958,9 +1119,12 @@ function DashboardContent() {
             <StatsCard label="Saidas na semana" value={`${weekStats.totalQty} itens`} description={currency(weekStats.totalVal)} />
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
             <StatsCard label="Saidas no mes" value={`${monthStats.totalQty} itens`} description={currency(monthStats.totalVal)} />
             <StatsCard label="Saidas no ano" value={`${yearStats.totalQty} itens`} description={currency(yearStats.totalVal)} />
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {categoryDonutData.length ? (
               <Donut data={categoryDonutData} title="Valor por categoria" />
             ) : (
@@ -977,24 +1141,27 @@ function DashboardContent() {
                 <p className="text-sm text-slate-500">Sem dados para exibir.</p>
               </div>
             )}
-          </section>
-
-          <section className="grid gap-4">
-            {movementSeries.length ? (
-              <BarTimeseries
-                data={movementSeries}
-                title={`Saidas ${movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}`}
+            {productDonutData.length ? (
+              <Donut
+                data={productDonutData}
+                title="Produtos mais vendidos"
+                formatValue={productDonutValueFormatter}
+                headerActions={<div className="min-w-[150px]">{renderProductMetricSelector()}</div>}
               />
             ) : (
               <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                  Saidas {movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}
-                </h3>
-                <p className="text-sm text-slate-500">Sem movimentacoes para o periodo selecionado.</p>
+                <header className="mb-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Produtos mais vendidos</h3>
+                    <div className="min-w-[150px]">{renderProductMetricSelector()}</div>
+                  </div>
+                </header>
+                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
               </div>
             )}
           </section>
-        </>
+
+                  </>
       )}
     </div>
   );
