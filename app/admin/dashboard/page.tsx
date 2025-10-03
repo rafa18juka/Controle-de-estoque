@@ -67,7 +67,7 @@ function normalizeNameCandidate(value: string) {
     return "";
   }
   const normalized = trimmed
-    .split(/[.\-_/]+/)
+    .split(/[.@\-_/]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
@@ -92,7 +92,7 @@ function deriveUserDisplayName(rawName: string | null | undefined, userId: strin
     }
   }
 
-  const candidates = [safeRaw, emailLocal].filter(Boolean);
+  const candidates = [emailLocal, safeRaw].filter(Boolean);
   let name = "";
   for (const candidate of candidates) {
     const normalized = normalizeNameCandidate(candidate);
