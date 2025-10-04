@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, ScanLine, BarChart2, Package, LogOut, History } from "lucide-react";
+import { Menu, ScanLine, BarChart2, Package, LogOut, History, QrCode } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -26,6 +26,7 @@ export function Navbar() {
     if (user.role === "admin") {
       base.push(
         { href: "/admin/dashboard", label: "Dashboard", icon: <BarChart2 size={16} /> },
+        { href: "/admin/rastreios", label: "Rastreios", icon: <QrCode size={16} /> },
         { href: "/admin/estoque", label: "Estoque", icon: <Package size={16} /> }
       );
     }
