@@ -1,16 +1,31 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
+
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/components/providers/auth-provider";
-import { processStockOut, resolveSkuToParentAndMultiplier } from "@/lib/firestore";
-import type { Product, ProductKit } from "@/lib/types";
+import { processStockOut, resolveSkuToParentAndMultiplier, saveTrackingCode } from "@/lib/firestore";
+import type { Product, ProductKit, TrackingCodeRecord } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
+
+const TRACKING_CODE_PATTERNS = [/^BR\d{13}$/, /^[A-Z]{2}\d{8,15}BR$/];
+
+function normalizeTrackingInput(value: string) {
+  return (value ?? "").trim().toUpperCase();
+}
+
+function tryParseTrackingCode(value: string): string | null {
+  const normalized = normalizeTrackingInput(value);
+  if (!normalized) {
+    return null;
+  }
+  return TRACKING_CODE_PATTERNS.some((pattern) => pattern.test(normalized)) ? normalized : null;
+}
 
 export default function ScanPage() {
   return (
@@ -39,6 +54,7 @@ function ScanContent() {
   const [lastEffectiveQty, setLastEffectiveQty] = useState<number | null>(null);
   const [lastScannedSku, setLastScannedSku] = useState<string | null>(null);
   // KIT-SKU END
+  const [lastTrackingRecord, setLastTrackingRecord] = useState<TrackingCodeRecord | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
@@ -102,8 +118,8 @@ function ScanContent() {
 
   const handleProcess = useCallback(
     async (formSku?: string) => {
-      const targetSku = (formSku ?? sku).trim();
-      if (!targetSku) {
+      const rawValue = (formSku ?? sku).trim();
+      if (!rawValue) {
         playErrorTone();
         toast.error("Informe um SKU valido.");
         return;
@@ -119,13 +135,40 @@ function ScanContent() {
         return;
       }
 
+      const trackingCode = tryParseTrackingCode(rawValue);
       const qtyValue = Math.max(1, Number.parseInt(quantity, 10) || 1);
 
       setProcessing(true);
 
+      if (trackingCode) {
+        try {
+          const record = await saveTrackingCode({
+            code: trackingCode,
+            userId: user.uid,
+            userName: user.displayName || user.email || "desconhecido",
+            productSku: processedProduct?.sku ?? lastScannedSku ?? undefined,
+            productName: processedProduct?.name ?? undefined
+          });
+          setLastTrackingRecord(record);
+          playSuccessTone();
+          toast.success(`Codigo ${record.code} registrado.`);
+          setSku("");
+          setQuantity("1");
+          skuInputRef.current?.focus();
+        } catch (error) {
+          playErrorTone();
+          const message =
+            error instanceof Error ? error.message : "Falha ao registrar o codigo de rastreamento.";
+          toast.error(message);
+        } finally {
+          setProcessing(false);
+        }
+        return;
+      }
+
       try {
         const { product, kit: resultKit, effectiveQty, scannedSku } = await processStockOut({
-          sku: targetSku,
+          sku: rawValue,
           qty: qtyValue,
           userId: user.uid,
           userName: user.displayName || user.email || "desconhecido"
@@ -138,6 +181,7 @@ function ScanContent() {
         setPreviewProduct(null);
         setPreviewKit(null);
         setPreviewLoading(false);
+        setLastTrackingRecord(null);
         playSuccessTone();
         const kitName = resultKit?.label && resultKit.label.trim().length ? resultKit.label : resultKit?.sku;
         if (resultKit) {
@@ -164,7 +208,16 @@ function ScanContent() {
         setProcessing(false);
       }
     },
-    [playErrorTone, playSuccessTone, processing, quantity, sku, user]
+    [
+      lastScannedSku,
+      playErrorTone,
+      playSuccessTone,
+      processedProduct,
+      processing,
+      quantity,
+      sku,
+      user
+    ]
   );
 
   const handleSubmit = useCallback(
@@ -280,6 +333,49 @@ function ScanContent() {
     );
   }, [lastEffectiveQty, lastScannedSku, previewKit, previewProduct, processedKit, processedProduct, sku]);
 
+  const trackingDetails = useMemo(() => {
+    if (!lastTrackingRecord) return null;
+
+    const timestampLabel = lastTrackingRecord.createdAt
+      ? new Date(lastTrackingRecord.createdAt).toLocaleString("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+      : "-";
+
+    return (
+      <div className="card space-y-2">
+        <h3 className="text-lg font-semibold text-slate-900">Ultimo rastreio salvo</h3>
+        <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <span className="font-medium text-slate-500">Codigo:</span>{" "}
+            <span className="font-mono text-xs uppercase">{lastTrackingRecord.code}</span>
+          </div>
+          <div>
+            <span className="font-medium text-slate-500">Registrado em:</span> {timestampLabel}
+          </div>
+          <div>
+            <span className="font-medium text-slate-500">Operador:</span> {lastTrackingRecord.userName || lastTrackingRecord.userId}
+          </div>
+          <div className="sm:col-span-2">
+            <span className="font-medium text-slate-500">Vinculado a:</span>{" "}
+            {lastTrackingRecord.productSku ? (
+              <span className="font-mono text-xs uppercase">
+                {lastTrackingRecord.productSku}
+                {lastTrackingRecord.productName ? ` - ${lastTrackingRecord.productName}` : ""}
+              </span>
+            ) : (
+              "-"
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }, [lastTrackingRecord]);
+
   return (
     <div className="space-y-8">
       <div className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card">
@@ -322,14 +418,7 @@ function ScanContent() {
         </form>
       </div>
       {productDetails}
+      {trackingDetails}
     </div>
   );
 }
-
-
-
-
-
-
-
-
