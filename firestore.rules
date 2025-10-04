@@ -1,4 +1,4 @@
-rules_version = '2';
+﻿rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function userDoc(uid) {
@@ -79,6 +79,30 @@ service cloud.firestore {
         request.resource.data.type == 'out' &&
         request.resource.data.userId == request.auth.uid);
       allow update, delete: if isAdmin();
+    }
+
+    match /trackingCodes/{trackingId} {
+      allow read: if isAdmin();
+      allow create: if (isAdmin() || (isStaff() && request.resource.data.userId == request.auth.uid)) &&
+        request.resource.data.keys().hasOnly([
+          'code',
+          'codeNormalized',
+          'userId',
+          'userName',
+          'createdAt',
+          'productSku',
+          'productName',
+          'stockMovementId'
+        ]) &&
+        request.resource.data.code is string && request.resource.data.code.size() > 0 &&
+        request.resource.data.codeNormalized is string && request.resource.data.codeNormalized.size() > 0 &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.userName is string &&
+        request.resource.data.createdAt == request.time &&
+        (!request.resource.data.keys().hasAny(['productSku']) || request.resource.data.productSku is string) &&
+        (!request.resource.data.keys().hasAny(['productName']) || request.resource.data.productName is string) &&
+        (!request.resource.data.keys().hasAny(['stockMovementId']) || request.resource.data.stockMovementId is string);
+      allow delete: if isAdmin();
     }
 
     match /categories/{categoryId} {
