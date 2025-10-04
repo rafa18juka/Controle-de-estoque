@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "staff";
+﻿export type UserRole = "admin" | "staff";
 
 export interface AppUser {
   uid: string;
@@ -48,6 +48,17 @@ export interface StockMovement {
   // KIT-SKU END
 }
 
+export interface TrackingCodeRecord {
+  id: string;
+  code: string;
+  userId: string;
+  userName: string;
+  createdAt: number;
+  productSku?: string;
+  productName?: string;
+  stockMovementId?: string;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -57,5 +68,3 @@ export interface Supplier {
   id: string;
   name: string;
 }
-
-

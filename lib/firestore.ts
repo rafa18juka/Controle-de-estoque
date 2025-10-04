@@ -1,4 +1,4 @@
-import type { Product, ProductKit, StockMovement } from "./types";
+﻿import type { Product, ProductKit, StockMovement, TrackingCodeRecord } from "./types";
 import { ensureFirebase } from "./firebase-client";
 
 export interface StockOutInput {
@@ -140,6 +140,7 @@ export async function getProductBySku(sku: string): Promise<Product | null> {
   return resolved ? resolved.product : null;
 }
 
+
 export async function processStockOut(input: StockOutInput): Promise<StockOutResult> {
   const { sku, qty, userId, userName } = input;
   if (!userId) {
@@ -256,6 +257,7 @@ export interface StockMovementsFilters {
   limit?: number;
   startAfter?: any;
   sku?: string;
+  scannedSku?: string;
   userId?: string;
   type?: "out" | "in";
   range?: { start?: Date | null; end?: Date | null };
@@ -274,43 +276,37 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
   const bundle = await ensureFirebase();
   const { firestore, db } = bundle;
   const ref = firestore.collection(db, "stockMovements");
-
   const constraints: any[] = [];
-
   if (filters.type) {
     constraints.push(firestore.where("type", "==", filters.type));
   }
-
-  if (filters.sku) {
-    constraints.push(firestore.where("sku", "==", filters.sku.trim()));
+  const sanitizedSku = typeof filters.sku === "string" ? filters.sku.trim() : "";
+  if (sanitizedSku) {
+    constraints.push(firestore.where("sku", "==", sanitizedSku));
   }
-
+  const sanitizedScannedSku = typeof filters.scannedSku === "string" ? filters.scannedSku.trim() : "";
+  if (sanitizedScannedSku) {
+    constraints.push(firestore.where("scannedSku", "==", sanitizedScannedSku));
+  }
   if (filters.userId) {
     constraints.push(firestore.where("userId", "==", filters.userId));
   }
-
   if (filters.range?.start) {
     constraints.push(
       firestore.where("timestamp", ">=", firestore.Timestamp.fromDate(filters.range.start))
     );
   }
-
   if (filters.range?.end) {
     constraints.push(
       firestore.where("timestamp", "<=", firestore.Timestamp.fromDate(filters.range.end))
     );
   }
-
   constraints.push(firestore.orderBy("timestamp", "desc"));
-
   const pageLimit = filters.limit ?? 25;
-
   if (filters.startAfter) {
     constraints.push(firestore.startAfter(filters.startAfter));
   }
-
   constraints.push(firestore.limit(pageLimit));
-
   const query = firestore.query(ref, ...constraints);
   const snapshot = await firestore.getDocs(query);
 
@@ -359,19 +355,16 @@ export async function deleteStockMovement(movementId: string): Promise<void> {
   const bundle = await ensureFirebase();
   const { firestore, db } = bundle;
   const movementRef = firestore.doc(db, "stockMovements", movementId);
-
   await firestore.runTransaction(db, async (transaction: any) => {
     const snapshot = await transaction.get(movementRef);
     if (!snapshot.exists()) {
       throw new Error("Movimento nao encontrado.");
     }
-
     const data = snapshot.data();
     const productId = typeof data.productId === "string" ? data.productId : "";
     const rawQty = data.effectiveQty ?? data.qty ?? 0;
     const movementQty = Number(rawQty);
     const movementType = typeof data.type === "string" ? data.type : "out";
-
     if (productId && Number.isFinite(movementQty) && movementQty > 0) {
       const productRef = firestore.doc(db, "products", productId);
       const productSnapshot = await transaction.get(productRef);
@@ -379,9 +372,7 @@ export async function deleteStockMovement(movementId: string): Promise<void> {
         const productData = productSnapshot.data();
         const currentQuantity = Number(productData.quantity ?? 0);
         const unitPrice = Number(productData.unitPrice ?? 0);
-
         let newQuantity = currentQuantity;
-
         if (movementType === "out") {
           newQuantity = currentQuantity + movementQty;
         } else if (movementType === "in") {
@@ -390,20 +381,16 @@ export async function deleteStockMovement(movementId: string): Promise<void> {
             newQuantity = 0;
           }
         }
-
         const newTotalValue = Number((newQuantity * unitPrice).toFixed(2));
-
         transaction.update(productRef, {
           quantity: newQuantity,
           totalValue: newTotalValue
         });
       }
     }
-
     transaction.delete(movementRef);
   });
 }
-
 export async function fetchStockMovementsForExport(
   filters: StockMovementsFilters,
   maxRecords = 1000
@@ -431,6 +418,149 @@ export async function fetchStockMovementsForExport(
   return collected.slice(0, maxRecords);
 }
 
+export interface SaveTrackingCodeInput {
+  code: string;
+  userId: string;
+  userName: string;
+  productSku?: string;
+  productName?: string;
+  stockMovementId?: string;
+}
+
+export interface TrackingCodeFilters {
+  limit?: number;
+  startAfter?: any;
+  userId?: string;
+  code?: string;
+  range?: { start?: Date | null; end?: Date | null };
+}
+
+export interface TrackingCodesPage {
+  records: TrackingCodeRecord[];
+  nextCursor: any;
+}
+
+function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
+  const data = doc.data ? doc.data() : {};
+  const createdAtValue = data.createdAt && typeof data.createdAt.toMillis === "function"
+    ? data.createdAt.toMillis()
+    : Number(data.createdAt ?? 0);
+  return {
+    id: doc.id,
+    code: typeof data.code === "string" ? data.code : "",
+    userId: typeof data.userId === "string" ? data.userId : "",
+    userName: typeof data.userName === "string" ? data.userName : "",
+    createdAt: createdAtValue,
+    productSku: typeof data.productSku === "string" && data.productSku.length ? data.productSku : undefined,
+    productName: typeof data.productName === "string" && data.productName.length ? data.productName : undefined,
+    stockMovementId:
+      typeof data.stockMovementId === "string" && data.stockMovementId.length ? data.stockMovementId : undefined
+  };
+}
+
+export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<TrackingCodeRecord> {
+  const { code, userId, userName, productSku, productName, stockMovementId } = input;
+  if (!userId) {
+    throw new Error("Usuario nao autenticado.");
+  }
+  const sanitizedCode = typeof code === "string" ? code.trim() : "";
+  if (!sanitizedCode) {
+    throw new Error("Informe um codigo valido.");
+  }
+  const normalizedCode = sanitizedCode.toUpperCase();
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const collectionRef = firestore.collection(db, "trackingCodes");
+  const payload: Record<string, any> = {
+    code: sanitizedCode,
+    codeNormalized: normalizedCode,
+    userId,
+    userName: (userName ?? "").trim() || "desconhecido",
+    createdAt: firestore.serverTimestamp()
+  };
+  const trimmedSku = typeof productSku === "string" ? productSku.trim() : "";
+  if (trimmedSku) {
+    payload.productSku = trimmedSku;
+  }
+  const trimmedProductName = typeof productName === "string" ? productName.trim() : "";
+  if (trimmedProductName) {
+    payload.productName = trimmedProductName;
+  }
+  const trimmedMovementId = typeof stockMovementId === "string" ? stockMovementId.trim() : "";
+  if (trimmedMovementId) {
+    payload.stockMovementId = trimmedMovementId;
+  }
+  const docRef = await firestore.addDoc(collectionRef, payload);
+  const snapshot = await firestore.getDoc(docRef);
+  if (!snapshot.exists()) {
+    throw new Error("Falha ao registrar o codigo de rastreamento.");
+  }
+  return mapTrackingCodeSnapshot(snapshot);
+}
+
+export async function fetchTrackingCodes(filters: TrackingCodeFilters): Promise<TrackingCodesPage> {
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const ref = firestore.collection(db, "trackingCodes");
+  const constraints: any[] = [];
+  const sanitizedUser = typeof filters.userId === "string" ? filters.userId.trim() : "";
+  if (sanitizedUser) {
+    constraints.push(firestore.where("userId", "==", sanitizedUser));
+  }
+  const sanitizedCode = typeof filters.code === "string" ? filters.code.trim().toUpperCase() : "";
+  const hasCodeSearch = Boolean(sanitizedCode);
+  if (hasCodeSearch) {
+    constraints.push(firestore.orderBy("codeNormalized"));
+    constraints.push(firestore.startAt(sanitizedCode));
+    constraints.push(firestore.endAt(`${sanitizedCode}\uf8ff`));
+  } else {
+    constraints.push(firestore.orderBy("createdAt", "desc"));
+    if (filters.range?.start instanceof Date) {
+      constraints.push(
+        firestore.where("createdAt", ">=", firestore.Timestamp.fromDate(filters.range.start))
+      );
+    }
+    if (filters.range?.end instanceof Date) {
+      constraints.push(
+        firestore.where("createdAt", "<=", firestore.Timestamp.fromDate(filters.range.end))
+      );
+    }
+  }
+  if (filters.startAfter) {
+    constraints.push(firestore.startAfter(filters.startAfter));
+  }
+  const pageLimit = filters.limit ?? 25;
+  constraints.push(firestore.limit(pageLimit));
+  const query = firestore.query(ref, ...constraints);
+  const snapshot = await firestore.getDocs(query);
+  let records = snapshot.docs.map((doc: any) => mapTrackingCodeSnapshot(doc));
+  if (hasCodeSearch && filters.range) {
+    const startMs = filters.range.start instanceof Date ? filters.range.start.getTime() : null;
+    const endMs = filters.range.end instanceof Date ? filters.range.end.getTime() : null;
+    records = records.filter((record: TrackingCodeRecord) => {
+      if (startMs && record.createdAt && record.createdAt < startMs) {
+        return false;
+      }
+      if (endMs && record.createdAt && record.createdAt > endMs) {
+        return false;
+      }
+      return true;
+    });
+    records.sort((a: TrackingCodeRecord, b: TrackingCodeRecord) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  }
+  const nextCursor = snapshot.docs.length === pageLimit ? snapshot.docs[snapshot.docs.length - 1] : null;
+  return { records, nextCursor };
+}
+
+export async function deleteTrackingCode(codeId: string): Promise<void> {
+  if (!codeId) {
+    throw new Error("Codigo invalido.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const docRef = firestore.doc(db, "trackingCodes", codeId);
+  await firestore.deleteDoc(docRef);
+}
 export interface MovementUserOption {
   id: string;
   name: string;
@@ -482,6 +612,11 @@ async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
 
   return map;
 }
+
+
+
+
+
 
 
 
