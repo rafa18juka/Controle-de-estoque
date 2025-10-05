@@ -467,7 +467,7 @@ function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
         quantity
       };
     })
-    .filter((entry): entry is TrackingCodeProductLink => Boolean(entry));
+    .filter((entry: TrackingCodeProductLink | null): entry is TrackingCodeProductLink => Boolean(entry));
 
   return {
     id: doc.id,
@@ -529,7 +529,7 @@ export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<Tr
             quantity
           };
         })
-        .filter((entry): entry is TrackingCodeProductLink => Boolean(entry))
+        .filter((entry: TrackingCodeProductLink | null): entry is TrackingCodeProductLink => Boolean(entry))
     : [];
 
   if (trimmedMovementId) {
