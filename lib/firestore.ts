@@ -1,4 +1,4 @@
-﻿import type { Product, ProductKit, StockMovement, TrackingCodeRecord } from "./types";
+﻿import type { Product, ProductKit, StockMovement, TrackingCodeProductLink, TrackingCodeRecord } from "./types";
 import { ensureFirebase } from "./firebase-client";
 
 export interface StockOutInput {
@@ -425,6 +425,7 @@ export interface SaveTrackingCodeInput {
   productSku?: string;
   productName?: string;
   stockMovementId?: string;
+  products?: TrackingCodeProductLink[];
 }
 
 export interface TrackingCodeFilters {
@@ -445,6 +446,29 @@ function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
   const createdAtValue = data.createdAt && typeof data.createdAt.toMillis === "function"
     ? data.createdAt.toMillis()
     : Number(data.createdAt ?? 0);
+  const rawProducts = Array.isArray(data.products) ? data.products : [];
+  const products = rawProducts
+    .map((item: any): TrackingCodeProductLink | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const sku = typeof item.sku === "string" ? item.sku.trim() : "";
+      if (!sku) {
+        return null;
+      }
+      const nameValue = typeof item.name === "string" ? item.name.trim() : "";
+      const scannedSkuValue = typeof item.scannedSku === "string" ? item.scannedSku.trim() : "";
+      const quantityValue = Number(item.quantity);
+      const quantity = Number.isFinite(quantityValue) ? quantityValue : undefined;
+      return {
+        sku,
+        name: nameValue || undefined,
+        scannedSku: scannedSkuValue || undefined,
+        quantity
+      };
+    })
+    .filter((entry): entry is TrackingCodeProductLink => Boolean(entry));
+
   return {
     id: doc.id,
     code: typeof data.code === "string" ? data.code : "",
@@ -454,12 +478,13 @@ function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
     productSku: typeof data.productSku === "string" && data.productSku.length ? data.productSku : undefined,
     productName: typeof data.productName === "string" && data.productName.length ? data.productName : undefined,
     stockMovementId:
-      typeof data.stockMovementId === "string" && data.stockMovementId.length ? data.stockMovementId : undefined
+      typeof data.stockMovementId === "string" && data.stockMovementId.length ? data.stockMovementId : undefined,
+    products: products.length ? products : undefined
   };
 }
 
 export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<TrackingCodeRecord> {
-  const { code, userId, userName, productSku, productName, stockMovementId } = input;
+  const { code, userId, userName, productSku, productName, stockMovementId, products } = input;
   if (!userId) {
     throw new Error("Usuario nao autenticado.");
   }
@@ -478,18 +503,65 @@ export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<Tr
     userName: (userName ?? "").trim() || "desconhecido",
     createdAt: firestore.serverTimestamp()
   };
+
   const trimmedSku = typeof productSku === "string" ? productSku.trim() : "";
-  if (trimmedSku) {
-    payload.productSku = trimmedSku;
-  }
   const trimmedProductName = typeof productName === "string" ? productName.trim() : "";
-  if (trimmedProductName) {
-    payload.productName = trimmedProductName;
-  }
   const trimmedMovementId = typeof stockMovementId === "string" ? stockMovementId.trim() : "";
+
+  const sanitizedProducts = Array.isArray(products)
+    ? products
+        .map((item): TrackingCodeProductLink | null => {
+          if (!item) {
+            return null;
+          }
+          const sku = typeof item.sku === "string" ? item.sku.trim() : "";
+          if (!sku) {
+            return null;
+          }
+          const nameValue = typeof item.name === "string" ? item.name.trim() : "";
+          const scannedSkuValue = typeof item.scannedSku === "string" ? item.scannedSku.trim() : "";
+          const quantityValue = Number(item.quantity);
+          const quantity = Number.isFinite(quantityValue) ? quantityValue : undefined;
+          return {
+            sku,
+            name: nameValue || undefined,
+            scannedSku: scannedSkuValue || undefined,
+            quantity
+          };
+        })
+        .filter((entry): entry is TrackingCodeProductLink => Boolean(entry))
+    : [];
+
   if (trimmedMovementId) {
     payload.stockMovementId = trimmedMovementId;
   }
+
+  if (sanitizedProducts.length) {
+    payload.products = sanitizedProducts.map((item) => {
+      const value: Record<string, any> = { sku: item.sku };
+      if (item.name) {
+        value.name = item.name;
+      }
+      if (typeof item.quantity === "number") {
+        value.quantity = item.quantity;
+      }
+      if (item.scannedSku) {
+        value.scannedSku = item.scannedSku;
+      }
+      return value;
+    });
+  }
+
+  const primarySku = trimmedSku || (sanitizedProducts[0]?.sku ?? "");
+  const primaryName = trimmedProductName || (sanitizedProducts[0]?.name ?? "");
+
+  if (primarySku) {
+    payload.productSku = primarySku;
+  }
+  if (primaryName) {
+    payload.productName = primaryName;
+  }
+
   const docRef = await firestore.addDoc(collectionRef, payload);
   const snapshot = await firestore.getDoc(docRef);
   if (!snapshot.exists()) {

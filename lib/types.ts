@@ -48,6 +48,13 @@ export interface StockMovement {
   // KIT-SKU END
 }
 
+export interface TrackingCodeProductLink {
+  sku: string;
+  name?: string;
+  quantity?: number;
+  scannedSku?: string;
+}
+
 export interface TrackingCodeRecord {
   id: string;
   code: string;
@@ -57,6 +64,7 @@ export interface TrackingCodeRecord {
   productSku?: string;
   productName?: string;
   stockMovementId?: string;
+  products?: TrackingCodeProductLink[];
 }
 
 export interface Category {
