@@ -145,24 +145,16 @@ function HistoryContent() {
     async (movementId: string) => {
       const target = movements.find((movement) => movement.id === movementId);
       const skuLabel = target?.scannedSku ?? target?.sku ?? "";
-      const nameLabel = target?.productName ? ` (${target.productName})` : "";
-      const confirmationMessage =
-        skuLabel
-          ? `Deseja excluir o registro do SKU ${skuLabel}${nameLabel}? Essa acao devolve o estoque.`
-          : "Deseja excluir este registro do historico? Essa acao devolve o estoque.";
-
-      if (typeof window !== "undefined") {
-        const confirmed = window.confirm(confirmationMessage);
-        if (!confirmed) {
-          return;
-        }
-      }
 
       setDeletingId(movementId);
       try {
         await deleteStockMovement(movementId);
         setMovements((prev) => prev.filter((movement) => movement.id !== movementId));
-        toast.success("Registro excluido com sucesso.");
+        if (skuLabel) {
+          toast.success(`Registro do SKU ${skuLabel} excluido.`);
+        } else {
+          toast.success("Registro excluido com sucesso.");
+        }
       } catch (error) {
         console.error("Falha ao excluir movimento", error);
         toast.error("Nao foi possivel excluir o registro.");
@@ -461,6 +453,7 @@ function csvEscape(value: string) {
   const safe = value.replace(/"/g, '""');
   return `"${safe}"`;
 }
+
 
 
 
