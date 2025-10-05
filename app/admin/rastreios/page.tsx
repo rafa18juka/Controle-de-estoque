@@ -16,7 +16,7 @@ import {
   fetchTrackingCodes,
   type MovementUserOption
 } from "@/lib/firestore";
-import type { TrackingCodeRecord } from "@/lib/types";
+import type { TrackingCodeProductLink, TrackingCodeRecord } from "@/lib/types";
 
 interface TrackingFilters {
   code: string;
@@ -262,14 +262,47 @@ function TrackingContent() {
                 ) : (
                   records.map((record) => {
                     const dateLabel = formatDateTime(record.createdAt);
+                    const productLinks: TrackingCodeProductLink[] =
+                      record.products && record.products.length
+                        ? record.products
+                        : record.productSku
+                          ? [
+                              {
+                                sku: record.productSku,
+                                name: record.productName ?? undefined
+                              }
+                            ]
+                          : [];
                     return (
                       <tr key={`${record.id}-${record.createdAt}`} className="text-slate-700">
                         <td className="whitespace-nowrap px-4 py-3">{dateLabel}</td>
                         <td className="whitespace-nowrap px-4 py-3 font-mono text-xs uppercase">{record.code}</td>
-                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs uppercase">
-                          {record.productSku ?? "-"}
+                        <td className="px-4 py-3 font-mono text-xs uppercase">
+                          {productLinks.length ? (
+                            <div className="flex flex-col gap-1">
+                              {productLinks.map((item, index) => (
+                                <span key={`${item.sku}-${index}`}>{item.sku}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
                         </td>
-                        <td className="px-4 py-3">{record.productName ?? "-"}</td>
+                        <td className="px-4 py-3">
+                          {productLinks.length ? (
+                            <div className="flex flex-col gap-1">
+                              {productLinks.map((item, index) => (
+                                <span key={`${item.sku}-${index}`}>
+                                  {item.name ?? "-"}
+                                  {typeof item.quantity === "number" ? ` | ${item.quantity} un.` : ""}
+                                  {item.scannedSku && item.scannedSku !== item.sku ? ` | escaneado: ${item.scannedSku}` : ""}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td className="px-4 py-3">{record.userName || record.userId}</td>
                         <td className="px-4 py-3 text-right">
                           <Button
@@ -329,3 +362,6 @@ function formatDateTime(timestamp: number) {
     minute: "2-digit"
   });
 }
+
+
+
