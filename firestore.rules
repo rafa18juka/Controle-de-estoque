@@ -1,248 +1,497 @@
-﻿rules_version = '2';
-
-service cloud.firestore {
-
-  match /databases/{database}/documents {
-
-    function userDoc(uid) {
-
-      return get(/databases/$(database)/documents/users/$(uid));
-
-    }
-
-
-
-    function isSignedIn() {
-
-      return request.auth != null;
-
-    }
-
-
-
-    function isAdmin() {
-
-      return isSignedIn() && userDoc(request.auth.uid).data.role == 'admin';
-
-    }
-
-
-
-    function isStaff() {
-
-      return isSignedIn() && userDoc(request.auth.uid).data.role == 'staff';
-
-    }
-
-
-
-    // KIT-SKU START
-
-    function getKits(data) {
-
-      return data.kits is list ? data.kits : [];
-
-    }
-
-
-
-    function getKitSkus(data) {
-
-      return data.kitSkus is list ? data.kitSkus : [];
-
-    }
-
-
-
-    function isValidKitEntry(kit, parentSku) {
-
-      return kit is map &&
-
-        kit.keys().hasOnly(['sku', 'multiplier', 'label']) &&
-
-        kit.sku is string &&
-
-        kit.sku.size() > 0 &&
-
-        kit.sku != parentSku &&
-
-        kit.multiplier is number &&
-
-        kit.multiplier >= 1 &&
-
-        kit.multiplier == math.floor(kit.multiplier) &&
-
-        (!kit.keys().hasAny(['label']) || kit.label is string);
-
-    }
-
-
-
-    function kitsAreValid(data) {
-
-      return true;
-
-    }
-
-
-
-    function areValidTrackingProducts(products) {
-
-      return products is list;
-
-    }
-
-    // KIT-SKU END
-
-
-
-    match /users/{userId} {
-
-      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
-
-      allow write: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
-
-    }
-
-
-
-    match /products/{productId} {
-
-      allow read: if isSignedIn();
-
-      // KIT-SKU START
-
-      allow create: if isAdmin() && kitsAreValid(request.resource.data);
-
-      allow delete: if isAdmin();
-
-      allow update: if isAdmin() && kitsAreValid(request.resource.data);
-
-      allow update: if isStaff() &&
-
-        kitsAreValid(request.resource.data) &&
-
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['kits', 'kitSkus']) &&
-
-        request.resource.data.diff(resource.data).addedKeys().hasOnly(['kits', 'kitSkus']) &&
-
-        request.resource.data.diff(resource.data).removedKeys().hasOnly([]);
-
-      // KIT-SKU END
-
-      allow update: if isStaff() &&
-
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['quantity', 'totalValue']) &&
-
-        request.resource.data.diff(resource.data).removedKeys().hasOnly([]) &&
-
-        request.resource.data.diff(resource.data).addedKeys().hasOnly([]) &&
-
-        request.resource.data.quantity is number &&
-
-        request.resource.data.quantity >= 0 &&
-
-        request.resource.data.quantity <= resource.data.quantity &&
-
-        math.abs(
-
-          request.resource.data.totalValue -
-
-          (request.resource.data.quantity * resource.data.unitPrice)
-
-        ) <= 0.01;
-
-    }
-
-
-
-    match /stockMovements/{movementId} {
-
-      allow read: if isAdmin();
-
-      allow create: if isAdmin() || (isStaff() &&
-
-        request.resource.data.type == 'out' &&
-
-        request.resource.data.userId == request.auth.uid);
-
-      allow update, delete: if isAdmin();
-
-    }
-
-
-
-    match /trackingCodes/{trackingId} {
-
-      allow read: if isAdmin();
-
-      allow create: if (isAdmin() || (isStaff() && request.resource.data.userId == request.auth.uid)) &&
-
-        request.resource.data.keys().hasOnly([
-
-          'code',
-
-          'codeNormalized',
-
-          'userId',
-
-          'userName',
-
-          'createdAt',
-
-          'productSku',
-
-          'productName',
-
-          'stockMovementId',
-
-          'products'
-
-        ]) &&
-
-        request.resource.data.code is string && request.resource.data.code.size() > 0 &&
-
-        request.resource.data.codeNormalized is string && request.resource.data.codeNormalized.size() > 0 &&
-
-        request.resource.data.userId == request.auth.uid &&
-
-        request.resource.data.userName is string &&
-
-        request.resource.data.createdAt == request.time &&
-
-        (!request.resource.data.keys().hasAny(['productSku']) || request.resource.data.productSku is string) &&
-
-        (!request.resource.data.keys().hasAny(['productName']) || request.resource.data.productName is string) &&
-
-        (!request.resource.data.keys().hasAny(['stockMovementId']) || request.resource.data.stockMovementId is string) &&
-
-        (!request.resource.data.keys().hasAny(['products']) || areValidTrackingProducts(request.resource.data.products));
-
-      allow delete: if isAdmin();
-
-    }
-
-
-
-    match /categories/{categoryId} {
-
-      allow read: if isSignedIn();
-
-      allow write: if isAdmin();
-
-    }
-
-
-
-    match /suppliers/{supplierId} {
-
-      allow read: if isSignedIn();
-
-      allow write: if isAdmin();
-
-    }
-
-  }
-
-}
-
+﻿rules_version = '2';
+
+
+
+service cloud.firestore {
+
+
+
+  match /databases/{database}/documents {
+
+
+
+    function userDoc(uid) {
+
+
+
+      return get(/databases/$(database)/documents/users/$(uid));
+
+
+
+    }
+
+
+
+
+
+
+
+    function isSignedIn() {
+
+
+
+      return request.auth != null;
+
+
+
+    }
+
+
+
+
+
+
+
+    function isAdmin() {
+
+
+
+      return isSignedIn() && userDoc(request.auth.uid).data.role == 'admin';
+
+
+
+    }
+
+
+
+
+
+
+
+    function isStaff() {
+
+
+
+      return isSignedIn() && userDoc(request.auth.uid).data.role == 'staff';
+
+
+
+    }
+
+
+
+
+
+
+
+    // KIT-SKU START
+
+
+
+    function getKits(data) {
+
+
+
+      return data.kits is list ? data.kits : [];
+
+
+
+    }
+
+
+
+
+
+
+
+    function getKitSkus(data) {
+
+
+
+      return data.kitSkus is list ? data.kitSkus : [];
+
+
+
+    }
+
+
+
+
+
+
+
+    function isValidKitEntry(kit, parentSku) {
+
+
+
+      return kit is map &&
+
+
+
+        kit.keys().hasOnly(['sku', 'multiplier', 'label']) &&
+
+
+
+        kit.sku is string &&
+
+
+
+        kit.sku.size() > 0 &&
+
+
+
+        kit.sku != parentSku &&
+
+
+
+        kit.multiplier is number &&
+
+
+
+        kit.multiplier >= 1 &&
+
+
+
+        kit.multiplier == math.floor(kit.multiplier) &&
+
+
+
+        (!kit.keys().hasAny(['label']) || kit.label is string);
+
+
+
+    }
+
+
+
+
+
+
+
+    function kitsAreValid(data) {
+
+
+
+      return true;
+
+
+
+    }
+
+
+
+
+
+
+
+    function areValidTrackingProducts(products) {
+
+
+
+      return products is list;
+
+
+
+    }
+
+
+
+    // KIT-SKU END
+
+
+
+
+
+
+
+    match /users/{userId} {
+
+
+
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+
+
+
+      allow write: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+
+
+
+    }
+
+
+
+
+
+
+
+    match /products/{productId} {
+
+
+
+      allow read: if isSignedIn();
+
+
+
+      // KIT-SKU START
+
+
+
+      allow create: if isAdmin() && kitsAreValid(request.resource.data);
+
+
+
+      allow delete: if isAdmin();
+
+
+
+      allow update: if isAdmin() && kitsAreValid(request.resource.data);
+
+
+
+      allow update: if isStaff() &&
+
+
+
+        kitsAreValid(request.resource.data) &&
+
+
+
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['kits', 'kitSkus']) &&
+
+
+
+        request.resource.data.diff(resource.data).addedKeys().hasOnly(['kits', 'kitSkus']) &&
+
+
+
+        request.resource.data.diff(resource.data).removedKeys().hasOnly([]);
+
+
+
+      // KIT-SKU END
+
+
+
+      allow update: if isStaff() &&
+
+
+
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['quantity', 'totalValue']) &&
+
+
+
+        request.resource.data.diff(resource.data).removedKeys().hasOnly([]) &&
+
+
+
+        request.resource.data.diff(resource.data).addedKeys().hasOnly([]) &&
+
+
+
+        request.resource.data.quantity is number &&
+
+
+
+        request.resource.data.quantity >= 0 &&
+
+
+
+        request.resource.data.quantity <= resource.data.quantity &&
+
+
+
+        math.abs(
+
+
+
+          request.resource.data.totalValue -
+
+
+
+          (request.resource.data.quantity * resource.data.unitPrice)
+
+
+
+        ) <= 0.01;
+
+
+
+    }
+
+
+
+
+
+
+
+    match /stockMovements/{movementId} {
+
+
+
+      allow read: if isAdmin();
+
+
+
+      allow create: if isAdmin() || (isStaff() &&
+
+
+
+        request.resource.data.type == 'out' &&
+
+
+
+        request.resource.data.userId == request.auth.uid);
+
+
+
+      allow update, delete: if isAdmin();
+
+
+
+    }
+
+
+
+
+
+
+
+    match /trackingCodes/{trackingId} {
+
+
+
+      allow list: if isAdmin();
+      allow get: if isAdmin() || (isStaff() && resource.data.userId == request.auth.uid);
+
+
+
+      allow create: if (isAdmin() || (isStaff() && request.resource.data.userId == request.auth.uid)) &&
+
+
+
+        request.resource.data.keys().hasOnly([
+
+
+
+          'code',
+
+
+
+          'codeNormalized',
+
+
+
+          'userId',
+
+
+
+          'userName',
+
+
+
+          'createdAt',
+
+
+
+          'productSku',
+
+
+
+          'productName',
+
+
+
+          'stockMovementId',
+
+
+
+          'products'
+
+
+
+        ]) &&
+
+
+
+        request.resource.data.code is string && request.resource.data.code.size() > 0 &&
+
+
+
+        request.resource.data.codeNormalized is string && request.resource.data.codeNormalized.size() > 0 &&
+
+
+
+        request.resource.data.userId == request.auth.uid &&
+
+
+
+        request.resource.data.userName is string &&
+
+
+
+        request.resource.data.createdAt == request.time &&
+
+
+
+        (!request.resource.data.keys().hasAny(['productSku']) || request.resource.data.productSku is string) &&
+
+
+
+        (!request.resource.data.keys().hasAny(['productName']) || request.resource.data.productName is string) &&
+
+
+
+        (!request.resource.data.keys().hasAny(['stockMovementId']) || request.resource.data.stockMovementId is string) &&
+
+
+
+        (!request.resource.data.keys().hasAny(['products']) || areValidTrackingProducts(request.resource.data.products));
+
+
+
+      allow delete: if isAdmin();
+
+
+
+    }
+
+
+
+
+
+
+
+    match /categories/{categoryId} {
+
+
+
+      allow read: if isSignedIn();
+
+
+
+      allow write: if isAdmin();
+
+
+
+    }
+
+
+
+
+
+
+
+    match /suppliers/{supplierId} {
+
+
+
+      allow read: if isSignedIn();
+
+
+
+      allow write: if isAdmin();
+
+
+
+    }
+
+
+
+  }
+
+
+
+}
+
+
+
