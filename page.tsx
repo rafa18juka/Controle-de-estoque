@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useAuth } from "@/components/providers/auth-provider";
 import { getProductBySku, processStockOut, saveTrackingCode } from "@/lib/firestore";
-import type { Product, TrackingCodeProductLink } from "@/lib/types";
+import { parseTrackingCode } from "@/lib/tracking";
+import type { Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 
 const BarcodeScanner = dynamic(() => import("@/components/barcode-scanner").then((mod) => mod.BarcodeScanner), {
@@ -69,7 +70,6 @@ function ScanContent() {
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
   const [processedProduct, setProcessedProduct] = useState<Product | null>(null);
-  const [pendingTrackingProducts, setPendingTrackingProducts] = useState<TrackingCodeProductLink[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
@@ -208,22 +208,12 @@ function ScanContent() {
       setProcessing(true);
 
       try {
-        const { product, effectiveQty, scannedSku } = await processStockOut({
+        const { product } = await processStockOut({
           sku: rawValue,
           qty: qtyValue,
           userId: user.uid,
           userName: user.displayName || user.email || "desconhecido"
         });
-
-        setPendingTrackingProducts((prev) => [
-          ...prev,
-          {
-            sku: product.sku,
-            name: product.name,
-            quantity: effectiveQty,
-            scannedSku: scannedSku || undefined
-          }
-        ]);
         setProcessedProduct(product);
         setPreviewProduct(null);
         setPreviewLoading(false);
@@ -237,46 +227,32 @@ function ScanContent() {
         const lowerMessage = message.toLowerCase();
 
         if (lowerMessage.includes("produto nao encontrado")) {
-          try {
-            const productsPayload = pendingTrackingProducts.length
-              ? pendingTrackingProducts
-              : processedProduct
-                ? [
-                    {
-                      sku: processedProduct.sku,
-                      name: processedProduct.name
-                    }
-                  ]
-                : [];
-            const record = await saveTrackingCode({
-              code: rawValue.toUpperCase(),
-              userId: user.uid,
-              userName: user.displayName || user.email || "desconhecido",
-              productSku:
-                pendingTrackingProducts[0]?.sku ??
-                processedProduct?.sku ??
-                undefined,
-              productName: pendingTrackingProducts[0]?.name ?? processedProduct?.name ?? undefined,
-              products: productsPayload.length ? productsPayload : undefined
-            });
-            setPendingTrackingProducts([]);
-            setProcessedProduct(null);
-            setPreviewProduct(null);
-            setPreviewLoading(false);
-            playSuccessTone();
-            toast.success(`Codigo ${record.code} registrado.`);
-            setSku("");
-            setQuantity("1");
-            skuInputRef.current?.focus();
-            return;
-          } catch (trackingError) {
-            const trackingMessage =
-              trackingError instanceof Error
-                ? trackingError.message
-                : "Falha ao registrar o codigo de rastreamento.";
-            playErrorTone();
-            toast.error(trackingMessage);
-            return;
+          const trackingCode = parseTrackingCode(rawValue);
+          if (trackingCode) {
+            try {
+              const record = await saveTrackingCode({
+                code: trackingCode,
+                userId: user.uid,
+                userName: user.displayName || user.email || "desconhecido"
+              });
+              setProcessedProduct(null);
+              setPreviewProduct(null);
+              setPreviewLoading(false);
+              playSuccessTone();
+              toast.success(`Codigo ${record.code} registrado.`);
+              setSku("");
+              setQuantity("1");
+              skuInputRef.current?.focus();
+              return;
+            } catch (trackingError) {
+              const trackingMessage =
+                trackingError instanceof Error
+                  ? trackingError.message
+                  : "Falha ao registrar o codigo de rastreamento.";
+              playErrorTone();
+              toast.error(trackingMessage);
+              return;
+            }
           }
         }
 
@@ -285,6 +261,8 @@ function ScanContent() {
           toast.error("Estoque insuficiente.");
         } else if (lowerMessage.includes("usuario nao autenticado")) {
           toast.error("Usuario nao autenticado.");
+        } else if (lowerMessage.includes("produto nao encontrado")) {
+          toast.error("Produto nao encontrado ou codigo nao suportado.");
         } else {
           toast.error(message);
         }
@@ -292,7 +270,7 @@ function ScanContent() {
         setProcessing(false);
       }
     },
-    [pendingTrackingProducts, playErrorTone, playSuccessTone, processedProduct, processing, quantity, sku, user]
+    [playErrorTone, playSuccessTone, processing, quantity, sku, user]
   );
 
   const queueProcess = useCallback((value: string, delayMs: number = SCANNER_TRIGGER_DELAY_MS) => {
@@ -434,32 +412,6 @@ function ScanContent() {
     );
   }, [previewProduct, processedProduct, sku]);
 
-  const pendingTrackingDetails = useMemo(() => {
-    if (pendingTrackingProducts.length === 0) return null;
-
-    return (
-      <div className="card space-y-2">
-        <h3 className="text-lg font-semibold text-slate-900">Produtos aguardando rastreio</h3>
-        <p className="text-xs text-slate-500">Escaneie o codigo de rastreio para vincular estes itens.</p>
-        <ul className="space-y-1">
-          {pendingTrackingProducts.map((item, index) => (
-            <li
-              key={`${item.sku}-${index}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600"
-            >
-              <span className="font-mono uppercase text-slate-700">{item.sku}</span>
-              <span>
-                {item.name ?? "-"}
-                {typeof item.quantity === "number" ? ` | ${item.quantity} un.` : ""}
-                {item.scannedSku && item.scannedSku !== item.sku ? ` | escaneado: ${item.scannedSku}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }, [pendingTrackingProducts]);
-
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card lg:flex-row">
@@ -542,7 +494,6 @@ function ScanContent() {
           {previewLoading && <p className="text-sm text-slate-500">Buscando produto...</p>}
         </form>
       </div>
-      {pendingTrackingDetails}
       {productDetails}
     </div>
   );
