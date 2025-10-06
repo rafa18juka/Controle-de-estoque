@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Trash2 } from "lucide-react";
 
 import { ProtectedRoute } from "@/components/protected-route";
 import { RoleGate } from "@/components/role-gate";
@@ -18,10 +18,29 @@ import {
   type MovementUserOption,
   type StockMovementWithProduct
 } from "@/lib/firestore";
+import { formatCurrency } from "@/lib/utils";
 
 type IntervalOption = "today" | "week" | "month" | "year" | "custom";
 
 type MovementTypeFilter = "out" | "in";
+
+const MAX_BULK_RECORDS = 10000;
+
+type SortDirection = "asc" | "desc";
+type SortKey =
+  | "timestamp"
+  | "sku"
+  | "scannedSku"
+  | "productName"
+  | "qty"
+  | "multiplier"
+  | "totalValue"
+  | "userName";
+
+interface SortState {
+  key: SortKey;
+  direction: SortDirection;
+}
 
 interface HistoryFilters {
   interval: IntervalOption;
@@ -59,6 +78,8 @@ function HistoryContent() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [sort, setSort] = useState<SortState>({ key: "timestamp", direction: "desc" });
 
   useEffect(() => {
     let active = true;
@@ -181,16 +202,34 @@ function HistoryContent() {
         return;
       }
 
-      const header = ["Data/Hora", "SKU pai", "SKU escaneado", "Produto", "Quantidade", "Multiplicador", "Usuario"];
-      const rows = data.map((movement) => [
-        formatDateTime(movement.timestamp),
-        movement.sku,
-        movement.scannedSku ?? movement.sku,
-        movement.productName || "",
-        String(movement.qty > 0 ? -Math.abs(movement.qty) : movement.qty),
-        String(movement.multiplier ?? 1),
-        movement.userName || movement.userId
-      ]);
+      const exportData = sortMovementsList(data, sort);
+
+      const header = [
+        "Data/Hora",
+        "SKU pai",
+        "SKU escaneado",
+        "Produto",
+        "Quantidade",
+        "Multiplicador",
+        "Valor",
+        "Usuario"
+      ];
+      const rows = exportData.map((movement) => {
+        const quantity = movement.qty > 0 ? -Math.abs(movement.qty) : movement.qty;
+        const multiplier = movement.multiplier ?? 1;
+        const movementValue = computeMovementValue(movement);
+        const formattedValue = formatCurrency(movementValue === 0 ? 0 : -Math.abs(movementValue));
+        return [
+          formatDateTime(movement.timestamp),
+          movement.sku,
+          movement.scannedSku ?? movement.sku,
+          movement.productName || "",
+          String(quantity),
+          String(multiplier),
+          formattedValue,
+          movement.userName || movement.userId
+        ];
+      });
 
       const csv = [header, ...rows]
         .map((row) => row.map(csvEscape).join(","))
@@ -210,8 +249,81 @@ function HistoryContent() {
       console.error("Falha ao exportar CSV", error);
       toast.error("Nao foi possivel exportar o CSV.");
     } finally {
-      setExporting(false);
+        setExporting(false);
     }
+  };
+
+  const sortedMovements = useMemo(
+    () => sortMovementsList(movements, sort),
+    [movements, sort]
+  );
+
+  const handleLoadAll = useCallback(async () => {
+    if (loadingAll || loading || exporting) {
+      return;
+    }
+    setLoadingAll(true);
+    try {
+      const data = await fetchStockMovementsForExport(
+        {
+          sku: filters.sku.trim() || undefined,
+          userId: filters.userId || undefined,
+          type: filters.type || undefined,
+          range
+        },
+        MAX_BULK_RECORDS
+      );
+
+      setMovements(data);
+      setCursor(null);
+      setHasMore(false);
+
+      if (data.length >= MAX_BULK_RECORDS) {
+        toast.warning(
+          `Exibindo os primeiros ${MAX_BULK_RECORDS} registros. Refine o filtro para carregar menos itens.`
+        );
+      } else if (!data.length) {
+        toast.info("Nenhum movimento encontrado para os filtros atuais.");
+      } else {
+        toast.success(`Carregados ${data.length} registro(s).`);
+      }
+    } catch (error) {
+      console.error("Falha ao carregar todos os movimentos", error);
+      toast.error("Nao foi possivel carregar todos os movimentos.");
+    } finally {
+      setLoadingAll(false);
+    }
+  }, [exporting, filters.sku, filters.type, filters.userId, loading, loadingAll, range]);
+
+  const handleSort = (key: SortKey) => {
+    setSort((prev) => {
+      if (prev.key === key) {
+        return {
+          key,
+          direction: prev.direction === "asc" ? "desc" : "asc"
+        };
+      }
+      return {
+        key,
+        direction: key === "timestamp" ? "desc" : "asc"
+      };
+    });
+  };
+
+  const renderSortIcon = (key: SortKey) => {
+    if (sort.key !== key) {
+      return <ArrowUpDown className="h-3.5 w-3.5 opacity-60" aria-hidden />;
+    }
+    return sort.direction === "asc" ? (
+      <ArrowUp className="h-3.5 w-3.5" aria-hidden />
+    ) : (
+      <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+    );
+  };
+
+  const ariaSortFor = (key: SortKey): "ascending" | "descending" | "none" => {
+    if (sort.key !== key) return "none";
+    return sort.direction === "asc" ? "ascending" : "descending";
   };
 
   return (
@@ -310,34 +422,101 @@ function HistoryContent() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">Data/Hora</th>
-                <th className="px-4 py-3">SKU pai</th>
-                <th className="px-4 py-3">SKU escaneado</th>
-                <th className="px-4 py-3">Produto</th>
-                <th className="px-4 py-3">Quantidade (-)</th>
-                <th className="px-4 py-3">Multiplicador</th>
-                <th className="px-4 py-3">Usuario</th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("timestamp")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("timestamp")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Data/Hora {renderSortIcon("timestamp")}
+                  </button>
+                </th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("sku")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("sku")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    SKU pai {renderSortIcon("sku")}
+                  </button>
+                </th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("scannedSku")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("scannedSku")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    SKU escaneado {renderSortIcon("scannedSku")}
+                  </button>
+                </th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("productName")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("productName")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Produto {renderSortIcon("productName")}
+                  </button>
+                </th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("qty")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("qty")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Quantidade (-) {renderSortIcon("qty")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 w-12" aria-sort={ariaSortFor("multiplier")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("multiplier")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Multiplicador {renderSortIcon("multiplier")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 w-44" aria-sort={ariaSortFor("totalValue")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("totalValue")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Valor {renderSortIcon("totalValue")}
+                  </button>
+                </th>
+                <th className="px-4 py-3" aria-sort={ariaSortFor("userName")}>
+                  <button
+                    type="button"
+                    onClick={() => handleSort("userName")}
+                    className="flex items-center gap-1 text-left uppercase tracking-wide text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Usuario {renderSortIcon("userName")}
+                  </button>
+                </th>
                 <th className="px-4 py-3 text-right">Acoes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading && movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan={8}>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={9}>
                     Carregando historico...
                   </td>
                 </tr>
               ) : movements.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-400" colSpan={8}>
+                  <td className="px-4 py-6 text-center text-slate-400" colSpan={9}>
                     Nenhum movimento encontrado para o filtro atual.
                   </td>
                 </tr>
               ) : (
-                movements.map((movement) => {
+                sortedMovements.map((movement) => {
                   const scannedSku = movement.scannedSku ?? movement.sku;
                   const isKit = Boolean(movement.scannedSku && movement.scannedSku !== movement.sku);
                   const multiplierValue = Number(movement.multiplier ?? 1);
+                  const movementValue = computeMovementValue(movement);
+                  const formattedValue = formatCurrency(movementValue === 0 ? 0 : -Math.abs(movementValue));
                   const multiplierDisplay = isKit || multiplierValue !== 1 ? `x${multiplierValue}` : "-";
                   return (
                     <tr key={`${movement.id}-${movement.timestamp}`} className="text-slate-700">
@@ -351,7 +530,10 @@ function HistoryContent() {
                       </td>
                       <td className="px-4 py-3">{movement.productName || "-"}</td>
                       <td className="px-4 py-3 font-semibold text-rose-600">-{Math.abs(movement.qty)}</td>
-                      <td className="px-4 py-3">{multiplierDisplay}</td>
+                      <td className="px-4 py-3 w-12 whitespace-nowrap">{multiplierDisplay}</td>
+                      <td className="px-4 py-3 w-44 whitespace-nowrap text-right font-semibold text-rose-600">
+                        {formattedValue}
+                      </td>
                       <td className="px-4 py-3">{movement.userName || movement.userId}</td>
                       <td className="px-4 py-3 text-right">
                         <Button
@@ -376,12 +558,27 @@ function HistoryContent() {
 
         <div className="flex items-center justify-between px-4 py-3 text-sm text-slate-500">
           <span>
-            {movements.length} registro{movements.length === 1 ? "" : "s"}
+            {sortedMovements.length} registro{sortedMovements.length === 1 ? "" : "s"}
             {hasMore ? " (mais disponiveis)" : ""}
           </span>
-          <Button type="button" variant="outline" disabled={!hasMore || loadingMore || loading} onClick={handleLoadMore}>
-            {loadingMore ? "Carregando..." : hasMore ? "Carregar mais" : "Fim da lista"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!hasMore || loadingMore || loading || loadingAll}
+              onClick={handleLoadMore}
+            >
+              {loadingMore ? "Carregando..." : hasMore ? "Carregar mais" : "Fim da lista"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading || loadingMore || loadingAll}
+              onClick={handleLoadAll}
+            >
+              {loadingAll ? "Carregando tudo..." : "Carregar tudo"}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -452,6 +649,57 @@ function formatDateTime(timestamp: number) {
 function csvEscape(value: string) {
   const safe = value.replace(/"/g, '""');
   return `"${safe}"`;
+}
+
+function computeMovementValue(movement: StockMovementWithProduct): number {
+  const total = Number(movement.totalValue);
+  if (Number.isFinite(total) && total >= 0) {
+    return total;
+  }
+  const unitPrice = Number(movement.unitPrice ?? 0);
+  const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+  const fallback = unitPrice * quantity;
+  return Number.isFinite(fallback) && fallback >= 0 ? fallback : 0;
+}
+
+function getSortValue(movement: StockMovementWithProduct, key: SortKey): number | string {
+  switch (key) {
+    case "timestamp":
+      return Number(movement.timestamp ?? 0);
+    case "sku":
+      return movement.sku ?? "";
+    case "scannedSku":
+      return movement.scannedSku ?? movement.sku ?? "";
+    case "productName":
+      return movement.productName ?? "";
+    case "qty":
+      return Math.abs(Number(movement.qty ?? 0));
+    case "multiplier":
+      return Number(movement.multiplier ?? 1);
+    case "totalValue":
+      return computeMovementValue(movement);
+    case "userName":
+      return movement.userName || movement.userId || "";
+    default:
+      return "";
+  }
+}
+
+function sortMovementsList(list: StockMovementWithProduct[], sort: SortState): StockMovementWithProduct[] {
+  const copy = [...list];
+  copy.sort((a, b) => {
+    const aValue = getSortValue(a, sort.key);
+    const bValue = getSortValue(b, sort.key);
+
+    if (typeof aValue === "number" && typeof bValue === "number") {
+      const diff = aValue - bValue;
+      return sort.direction === "asc" ? diff : -diff;
+    }
+
+    const result = String(aValue).localeCompare(String(bValue), "pt-BR", { sensitivity: "base" });
+    return sort.direction === "asc" ? result : -result;
+  });
+  return copy;
 }
 
 
