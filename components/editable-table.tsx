@@ -1606,7 +1606,7 @@ export function EditableTable({
 
 
 
-                  PreAAo unitAArio
+                  Preço unitário
 
 
 
