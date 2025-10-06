@@ -198,6 +198,8 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
     const movementsRef = firestore.collection(db, "stockMovements");
     const movementRef = firestore.doc(movementsRef);
 
+    const movementValue = Number((effectiveQty * unitPrice).toFixed(2));
+
     transaction.set(movementRef, {
       id: movementRef.id,
       productId: productRef.id,
@@ -207,6 +209,8 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
       userId,
       userName: userName || "desconhecido",
       timestamp: firestore.serverTimestamp(),
+      unitPrice,
+      totalValue: movementValue,
       // KIT-SKU START
       parentSku: product.sku,
       scannedSku: sanitizedSku,
@@ -324,6 +328,11 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
       userId: typeof data.userId === "string" ? data.userId : "",
       userName: typeof data.userName === "string" ? data.userName : "",
       timestamp: timestampValue,
+      unitPrice: Number(data.unitPrice ?? 0),
+      totalValue: Number(
+        data.totalValue ??
+          Number(data.unitPrice ?? 0) * Number(data.effectiveQty ?? data.qty ?? 0)
+      ),
       parentSku: typeof data.parentSku === "string" ? data.parentSku : undefined,
       scannedSku: typeof data.scannedSku === "string" ? data.scannedSku : undefined,
       multiplier: typeof data.multiplier === "number" ? data.multiplier : undefined,
@@ -339,12 +348,28 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
     )
   );
 
-  const productNames = await loadProductNames(productIds);
+  const productMetadata = await loadProductMetadata(productIds);
 
-  const enriched = movements.map((movement) => ({
-    ...movement,
-    productName: productNames.get(movement.productId ?? "") ?? ""
-  }));
+  const enriched = movements.map((movement) => {
+    const metadata = productMetadata.get(movement.productId ?? "");
+    const unitPriceFromMovement = Number(movement.unitPrice);
+    const unitPrice =
+      Number.isFinite(unitPriceFromMovement) && unitPriceFromMovement > 0
+        ? unitPriceFromMovement
+        : Number(metadata?.unitPrice ?? 0);
+    const qtyValue = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+    const totalValueFromMovement = Number(movement.totalValue);
+    const computedTotal = Number.isFinite(totalValueFromMovement) && totalValueFromMovement > 0
+      ? totalValueFromMovement
+      : Number((unitPrice * qtyValue).toFixed(2));
+
+    return {
+      ...movement,
+      productName: metadata?.name ?? "",
+      unitPrice,
+      totalValue: computedTotal
+    };
+  });
 
   const nextCursor = snapshot.docs.length === pageLimit ? snapshot.docs[snapshot.docs.length - 1] : null;
 
@@ -657,7 +682,12 @@ export async function fetchMovementUsers(): Promise<MovementUserOption[]> {
   });
 }
 
-async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
+interface ProductMetadata {
+  name: string;
+  unitPrice: number;
+}
+
+async function loadProductMetadata(ids: string[]): Promise<Map<string, ProductMetadata>> {
   if (!ids.length) {
     return new Map();
   }
@@ -665,7 +695,7 @@ async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
   const bundle = await ensureFirebase();
   const { firestore, db } = bundle;
   const unique = Array.from(new Set(ids));
-  const map = new Map<string, string>();
+  const map = new Map<string, ProductMetadata>();
 
   await Promise.all(
     unique.map(async (id) => {
@@ -674,7 +704,10 @@ async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
         const snapshot = await firestore.getDoc(docRef);
         if (snapshot.exists()) {
           const data = snapshot.data();
-          map.set(id, data.name ?? "");
+          map.set(id, {
+            name: data.name ?? "",
+            unitPrice: Number(data.unitPrice ?? 0)
+          });
         }
       } catch (error) {
         console.error("Falha ao carregar nome do produto", error);

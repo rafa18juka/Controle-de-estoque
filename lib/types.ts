@@ -40,6 +40,8 @@ export interface StockMovement {
   userId: string;
   userName: string;
   timestamp: number;
+  unitPrice?: number;
+  totalValue?: number;
   // KIT-SKU START
   parentSku?: string;
   scannedSku?: string;
