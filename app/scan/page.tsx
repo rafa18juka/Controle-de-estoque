@@ -12,20 +12,7 @@ import { useAuth } from "@/components/providers/auth-provider";
 import { processStockOut, resolveSkuToParentAndMultiplier, saveTrackingCode } from "@/lib/firestore";
 import type { Product, ProductKit, TrackingCodeProductLink, TrackingCodeRecord } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
-
-const TRACKING_CODE_PATTERNS = [/^BR\d{13}$/, /^[A-Z]{2}\d{8,15}BR$/];
-
-function normalizeTrackingInput(value: string) {
-  return (value ?? "").trim().toUpperCase();
-}
-
-function tryParseTrackingCode(value: string): string | null {
-  const normalized = normalizeTrackingInput(value);
-  if (!normalized) {
-    return null;
-  }
-  return TRACKING_CODE_PATTERNS.some((pattern) => pattern.test(normalized)) ? normalized : null;
-}
+import { parseTrackingCode } from "@/lib/tracking";
 
 export default function ScanPage() {
   return (
@@ -55,7 +42,6 @@ function ScanContent() {
   const [lastScannedSku, setLastScannedSku] = useState<string | null>(null);
   // KIT-SKU END
   const [lastTrackingRecord, setLastTrackingRecord] = useState<TrackingCodeRecord | null>(null);
-  const [pendingTrackingProducts, setPendingTrackingProducts] = useState<TrackingCodeProductLink[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
@@ -136,39 +122,19 @@ function ScanContent() {
         return;
       }
 
-      const trackingCode = tryParseTrackingCode(rawValue);
+      const trackingCode = parseTrackingCode(rawValue);
       const qtyValue = Math.max(1, Number.parseInt(quantity, 10) || 1);
 
       setProcessing(true);
 
       if (trackingCode) {
         try {
-          const productsPayload = pendingTrackingProducts.length
-            ? pendingTrackingProducts
-            : processedProduct
-              ? [
-                  {
-                    sku: processedProduct.sku,
-                    name: processedProduct.name,
-                    quantity: lastEffectiveQty ?? undefined,
-                    scannedSku: lastScannedSku ?? undefined
-                  }
-                ]
-              : [];
           const record = await saveTrackingCode({
             code: trackingCode,
             userId: user.uid,
-            userName: user.displayName || user.email || "desconhecido",
-            productSku:
-              pendingTrackingProducts[0]?.sku ??
-              processedProduct?.sku ??
-              lastScannedSku ??
-              undefined,
-            productName: pendingTrackingProducts[0]?.name ?? processedProduct?.name ?? undefined,
-            products: productsPayload.length ? productsPayload : undefined
+            userName: user.displayName || user.email || "desconhecido"
           });
           setLastTrackingRecord(record);
-          setPendingTrackingProducts([]);
           setProcessedProduct(null);
           setProcessedKit(null);
           setLastEffectiveQty(null);
@@ -200,15 +166,6 @@ function ScanContent() {
           userName: user.displayName || user.email || "desconhecido"
         });
 
-        setPendingTrackingProducts((prev) => [
-          ...prev,
-          {
-            sku: product.sku,
-            name: product.name,
-            quantity: effectiveQty,
-            scannedSku: scannedSku || undefined
-          }
-        ]);
         setProcessedProduct(product);
         setProcessedKit(resultKit);
         setLastEffectiveQty(effectiveQty);
@@ -233,45 +190,28 @@ function ScanContent() {
 
         if (lowerMessage.includes("produto nao encontrado")) {
           try {
-            const productsPayload = pendingTrackingProducts.length
-              ? pendingTrackingProducts
-              : processedProduct
-                ? [
-                    {
-                      sku: processedProduct.sku,
-                      name: processedProduct.name,
-                      quantity: lastEffectiveQty ?? undefined,
-                      scannedSku: lastScannedSku ?? undefined
-                    }
-                  ]
-                : [];
-            const record = await saveTrackingCode({
-              code: normalizeTrackingInput(rawValue),
-              userId: user.uid,
-              userName: user.displayName || user.email || "desconhecido",
-              productSku:
-                pendingTrackingProducts[0]?.sku ??
-                processedProduct?.sku ??
-                lastScannedSku ??
-                undefined,
-              productName: pendingTrackingProducts[0]?.name ?? processedProduct?.name ?? undefined,
-              products: productsPayload.length ? productsPayload : undefined
-            });
-            setPendingTrackingProducts([]);
-            setProcessedProduct(null);
-            setProcessedKit(null);
-            setLastEffectiveQty(null);
-            setLastScannedSku(null);
-            setPreviewProduct(null);
-            setPreviewKit(null);
-            setPreviewLoading(false);
-            setLastTrackingRecord(record);
-            playSuccessTone();
-            toast.success(`Codigo ${record.code} registrado.`);
-            setSku("");
-            setQuantity("1");
-            skuInputRef.current?.focus();
-            return;
+            const detectedTracking = parseTrackingCode(rawValue);
+            if (detectedTracking) {
+              const record = await saveTrackingCode({
+                code: detectedTracking,
+                userId: user.uid,
+                userName: user.displayName || user.email || "desconhecido"
+              });
+              setProcessedProduct(null);
+              setProcessedKit(null);
+              setLastEffectiveQty(null);
+              setLastScannedSku(null);
+              setPreviewProduct(null);
+              setPreviewKit(null);
+              setPreviewLoading(false);
+              setLastTrackingRecord(record);
+              playSuccessTone();
+              toast.success(`Codigo ${record.code} registrado.`);
+              setSku("");
+              setQuantity("1");
+              skuInputRef.current?.focus();
+              return;
+            }
           } catch (trackingError) {
             const trackingMessage =
               trackingError instanceof Error
@@ -295,17 +235,7 @@ function ScanContent() {
         setProcessing(false);
       }
     },
-    [
-      lastScannedSku,
-      pendingTrackingProducts,
-      playErrorTone,
-      playSuccessTone,
-      processedProduct,
-      processing,
-      quantity,
-      sku,
-      user
-    ]
+    [playErrorTone, playSuccessTone, processing, quantity, sku, user]
   );
 
   const handleSubmit = useCallback(
@@ -421,32 +351,6 @@ function ScanContent() {
     );
   }, [lastEffectiveQty, lastScannedSku, previewKit, previewProduct, processedKit, processedProduct, sku]);
 
-  const pendingTrackingDetails = useMemo(() => {
-    if (pendingTrackingProducts.length === 0) return null;
-
-    return (
-      <div className="card space-y-2">
-        <h3 className="text-lg font-semibold text-slate-900">Produtos aguardando rastreio</h3>
-        <p className="text-xs text-slate-500">Ao escanear o proximo codigo de rastreio ele sera vinculado aos itens abaixo.</p>
-        <ul className="space-y-1">
-          {pendingTrackingProducts.map((item, index) => (
-            <li
-              key={`${item.sku}-${index}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600"
-            >
-              <span className="font-mono uppercase text-slate-700">{item.sku}</span>
-              <span>
-                {item.name ?? "-"}
-                {typeof item.quantity === "number" ? ` | ${item.quantity} un.` : ""}
-                {item.scannedSku && item.scannedSku !== item.sku ? ` | escaneado: ${item.scannedSku}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }, [pendingTrackingProducts]);
-
   const trackingDetails = useMemo(() => {
     if (!lastTrackingRecord) return null;
 
@@ -554,7 +458,6 @@ function ScanContent() {
           {previewLoading && <p className="text-sm text-slate-500">Buscando produto...</p>}
         </form>
       </div>
-      {pendingTrackingDetails}
       {productDetails}
       {trackingDetails}
     </div>
