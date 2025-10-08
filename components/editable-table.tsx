@@ -155,6 +155,14 @@ interface EditableTableProps {
 
 
 type SortKey = "name" | "sku" | "unitPrice" | "category" | "supplier" | "quantity" | "estoqueMinimo" | "totalValue";
+type StockStatusKey = "sem-minimo" | "confortavel" | "saudavel" | "baixo" | "critico";
+type StockStatusFilter = "all" | StockStatusKey;
+type StockBadge = {
+  label: string;
+  className: string;
+  ratio: number | null;
+  status: StockStatusKey;
+};
 
 
 
@@ -263,6 +271,7 @@ export function EditableTable({
 
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [stockStatusFilter, setStockStatusFilter] = useState<StockStatusFilter>("all");
 
 
 
@@ -326,81 +335,28 @@ export function EditableTable({
 
 
 
-  const stockBadgeFor = (quantity: number, minimo: number) => {
-
-
-
+  const stockBadgeFor = (quantity: number, minimo: number): StockBadge => {
     if (!Number.isFinite(minimo) || minimo <= 0) {
-
-
-
       return {
-
-
-
         label: "Sem minimo definido",
-
-
-
         className: "bg-slate-100 text-slate-600",
-
-
-
-        ratio: null as number | null
-
-
-
+        ratio: null,
+        status: "sem-minimo"
       };
-
-
-
     }
-
-
-
     const ratio = minimo > 0 ? quantity / minimo : Infinity;
-
-
-
     if (ratio >= 1.6) {
-
-
-
-      return { label: "Confortável", className: "bg-emerald-100 text-emerald-700", ratio };
-
-
-
+      return { label: "Confortavel", className: "bg-emerald-100 text-emerald-700", ratio, status: "confortavel" };
     }
-
-
-
     if (ratio >= 1.2) {
-
-
-
-      return { label: "Saudavel", className: "bg-lime-100 text-lime-700", ratio };
-
-
-
+      return { label: "Saudavel", className: "bg-lime-100 text-lime-700", ratio, status: "saudavel" };
     }
-
     if (ratio >= 0.7) {
-
-
-
-      return { label: "Baixo", className: "bg-orange-100 text-orange-700", ratio };
-
-
-
+      return { label: "Baixo", className: "bg-orange-100 text-orange-700", ratio, status: "baixo" };
     }
-
-
-
-    return { label: "Critico", className: "bg-red-100 text-red-700", ratio };
-
-
-
+    return { label: "Critico", className: "bg-red-100 text-red-700", ratio, status: "critico" };
   };
+
 
 
 
@@ -731,118 +687,52 @@ export function EditableTable({
 
 
   const filteredProducts = useMemo(() => {
-
-
-
     const trimmedTerm = searchTerm.trim();
-
-
-
-    if (!trimmedTerm) return products;
-
-
-
-
-
-
-
     const normalizedTerm = trimmedTerm
-
-
-
-      .normalize("NFD")
-
-
-
-      .replace(/[\u0300-\u036f]/g, "")
-
-
-
-      .toLowerCase();
-
-
-
-
-
-
+      ? trimmedTerm.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+      : "";
 
     const matches = (value: unknown) => {
-
-
-
+      if (!trimmedTerm) return false;
       if (value === null || value === undefined) return false;
-
-
-
       return value
-
-
-
         .toString()
-
-
-
         .normalize("NFD")
-
-
-
         .replace(/[\u0300-\u036f]/g, "")
-
-
-
         .toLowerCase()
-
-
-
         .includes(normalizedTerm);
-
-
-
     };
 
-
-
-
-
-
-
     return products.filter((product) => {
-
-
-
       const merged = { ...product, ...drafts[product.id] };
 
-
-
-      return (
-
-
-
+      const hasSearchMatch =
+        !trimmedTerm ||
         matches(merged.name) ||
-
-
-
         matches(merged.sku) ||
-
-
-
         matches(merged.category) ||
+        matches(merged.supplier);
 
+      if (!hasSearchMatch) {
+        return false;
+      }
 
+      if (stockStatusFilter === "all") {
+        return true;
+      }
 
-        matches(merged.supplier)
+      const quantityValue =
+        typeof merged.quantity === "number" ? merged.quantity : Number(merged.quantity ?? 0);
 
+      const rawMinimo = (merged as Product & { estoqueMinimo?: number }).estoqueMinimo;
+      const parsedMinimo = typeof rawMinimo === "number" ? rawMinimo : Number(rawMinimo ?? 0);
+      const normalizedMinimo = Number.isFinite(parsedMinimo) ? Math.max(0, parsedMinimo) : 0;
+      const badge = stockBadgeFor(quantityValue, normalizedMinimo);
 
-
-      );
-
-
-
+      return badge.status === stockStatusFilter;
     });
+  }, [products, drafts, searchTerm, stockStatusFilter]);
 
-
-
-  }, [products, drafts, searchTerm]);
 
 
 
@@ -1290,11 +1180,63 @@ export function EditableTable({
 
 
 
-        <div className="w-full max-w-md xl:ml-auto">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end xl:ml-auto xl:max-w-none">
 
 
 
-          <div className="relative">
+          <Select
+
+
+
+            value={stockStatusFilter}
+
+
+
+            onChange={(event) => setStockStatusFilter(event.target.value as StockStatusFilter)}
+
+
+
+            aria-label="Filtrar por status do estoque"
+
+
+
+            className="sm:w-[200px]"
+
+
+
+          >
+
+
+
+            <option value="all">Todos os status</option>
+
+
+
+            <option value="confortavel">Confortavel</option>
+
+
+
+            <option value="saudavel">Saudavel</option>
+
+
+
+            <option value="baixo">Baixo</option>
+
+
+
+            <option value="critico">Critico</option>
+
+
+
+            <option value="sem-minimo">Sem minimo definido</option>
+
+
+
+          </Select>
+
+
+
+          <div className="relative sm:w-[240px] md:w-[280px] lg:w-[320px]">
 
 
 
