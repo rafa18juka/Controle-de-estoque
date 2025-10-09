@@ -78,3 +78,40 @@ export interface Supplier {
   id: string;
   name: string;
 }
+
+export type TaskOptionType = "task" | "platform" | "account";
+
+export interface TaskOption {
+  id: string;
+  type: TaskOptionType;
+  name: string;
+  color: string;
+}
+
+export type TaskStatus = "pending" | "completed" | "archived";
+
+export interface TaskAssignment {
+  id: string;
+  taskOptionId?: string;
+  taskLabel: string;
+  taskColor?: string;
+  platformId?: string;
+  platformLabel?: string;
+  platformColor?: string;
+  accountId?: string;
+  accountLabel?: string;
+  accountColor?: string;
+  productId?: string;
+  productSku?: string;
+  productName?: string;
+  userId: string;
+  userName: string;
+  assignedById: string;
+  assignedByName: string;
+  status: TaskStatus;
+  notes?: string;
+  dueDate?: number;
+  createdAt: number;
+  updatedAt?: number;
+  completedAt?: number;
+}

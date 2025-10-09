@@ -1,4 +1,13 @@
-﻿import type { Product, ProductKit, StockMovement, TrackingCodeProductLink, TrackingCodeRecord } from "./types";
+import type {
+  Product,
+  ProductKit,
+  StockMovement,
+  TaskAssignment,
+  TaskOption,
+  TaskOptionType,
+  TaskStatus,
+  TrackingCodeRecord
+} from "./types";
 import { ensureFirebase } from "./firebase-client";
 
 export interface StockOutInput {
@@ -198,8 +207,6 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
     const movementsRef = firestore.collection(db, "stockMovements");
     const movementRef = firestore.doc(movementsRef);
 
-    const movementValue = Number((effectiveQty * unitPrice).toFixed(2));
-
     transaction.set(movementRef, {
       id: movementRef.id,
       productId: productRef.id,
@@ -209,8 +216,6 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
       userId,
       userName: userName || "desconhecido",
       timestamp: firestore.serverTimestamp(),
-      unitPrice,
-      totalValue: movementValue,
       // KIT-SKU START
       parentSku: product.sku,
       scannedSku: sanitizedSku,
@@ -328,11 +333,6 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
       userId: typeof data.userId === "string" ? data.userId : "",
       userName: typeof data.userName === "string" ? data.userName : "",
       timestamp: timestampValue,
-      unitPrice: Number(data.unitPrice ?? 0),
-      totalValue: Number(
-        data.totalValue ??
-          Number(data.unitPrice ?? 0) * Number(data.effectiveQty ?? data.qty ?? 0)
-      ),
       parentSku: typeof data.parentSku === "string" ? data.parentSku : undefined,
       scannedSku: typeof data.scannedSku === "string" ? data.scannedSku : undefined,
       multiplier: typeof data.multiplier === "number" ? data.multiplier : undefined,
@@ -348,28 +348,12 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
     )
   );
 
-  const productMetadata = await loadProductMetadata(productIds);
+  const productNames = await loadProductNames(productIds);
 
-  const enriched = movements.map((movement) => {
-    const metadata = productMetadata.get(movement.productId ?? "");
-    const unitPriceFromMovement = Number(movement.unitPrice);
-    const unitPrice =
-      Number.isFinite(unitPriceFromMovement) && unitPriceFromMovement > 0
-        ? unitPriceFromMovement
-        : Number(metadata?.unitPrice ?? 0);
-    const qtyValue = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
-    const totalValueFromMovement = Number(movement.totalValue);
-    const computedTotal = Number.isFinite(totalValueFromMovement) && totalValueFromMovement > 0
-      ? totalValueFromMovement
-      : Number((unitPrice * qtyValue).toFixed(2));
-
-    return {
-      ...movement,
-      productName: metadata?.name ?? "",
-      unitPrice,
-      totalValue: computedTotal
-    };
-  });
+  const enriched = movements.map((movement) => ({
+    ...movement,
+    productName: productNames.get(movement.productId ?? "") ?? ""
+  }));
 
   const nextCursor = snapshot.docs.length === pageLimit ? snapshot.docs[snapshot.docs.length - 1] : null;
 
@@ -450,7 +434,6 @@ export interface SaveTrackingCodeInput {
   productSku?: string;
   productName?: string;
   stockMovementId?: string;
-  products?: TrackingCodeProductLink[];
 }
 
 export interface TrackingCodeFilters {
@@ -471,29 +454,6 @@ function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
   const createdAtValue = data.createdAt && typeof data.createdAt.toMillis === "function"
     ? data.createdAt.toMillis()
     : Number(data.createdAt ?? 0);
-  const rawProducts = Array.isArray(data.products) ? data.products : [];
-  const products = rawProducts
-    .map((item: any): TrackingCodeProductLink | null => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const sku = typeof item.sku === "string" ? item.sku.trim() : "";
-      if (!sku) {
-        return null;
-      }
-      const nameValue = typeof item.name === "string" ? item.name.trim() : "";
-      const scannedSkuValue = typeof item.scannedSku === "string" ? item.scannedSku.trim() : "";
-      const quantityValue = Number(item.quantity);
-      const quantity = Number.isFinite(quantityValue) ? quantityValue : undefined;
-      return {
-        sku,
-        name: nameValue || undefined,
-        scannedSku: scannedSkuValue || undefined,
-        quantity
-      };
-    })
-    .filter((entry: TrackingCodeProductLink | null): entry is TrackingCodeProductLink => Boolean(entry));
-
   return {
     id: doc.id,
     code: typeof data.code === "string" ? data.code : "",
@@ -503,13 +463,12 @@ function mapTrackingCodeSnapshot(doc: any): TrackingCodeRecord {
     productSku: typeof data.productSku === "string" && data.productSku.length ? data.productSku : undefined,
     productName: typeof data.productName === "string" && data.productName.length ? data.productName : undefined,
     stockMovementId:
-      typeof data.stockMovementId === "string" && data.stockMovementId.length ? data.stockMovementId : undefined,
-    products: products.length ? products : undefined
+      typeof data.stockMovementId === "string" && data.stockMovementId.length ? data.stockMovementId : undefined
   };
 }
 
 export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<TrackingCodeRecord> {
-  const { code, userId, userName, productSku, productName, stockMovementId, products } = input;
+  const { code, userId, userName, productSku, productName, stockMovementId } = input;
   if (!userId) {
     throw new Error("Usuario nao autenticado.");
   }
@@ -528,65 +487,18 @@ export async function saveTrackingCode(input: SaveTrackingCodeInput): Promise<Tr
     userName: (userName ?? "").trim() || "desconhecido",
     createdAt: firestore.serverTimestamp()
   };
-
   const trimmedSku = typeof productSku === "string" ? productSku.trim() : "";
+  if (trimmedSku) {
+    payload.productSku = trimmedSku;
+  }
   const trimmedProductName = typeof productName === "string" ? productName.trim() : "";
+  if (trimmedProductName) {
+    payload.productName = trimmedProductName;
+  }
   const trimmedMovementId = typeof stockMovementId === "string" ? stockMovementId.trim() : "";
-
-  const sanitizedProducts = Array.isArray(products)
-    ? products
-        .map((item): TrackingCodeProductLink | null => {
-          if (!item) {
-            return null;
-          }
-          const sku = typeof item.sku === "string" ? item.sku.trim() : "";
-          if (!sku) {
-            return null;
-          }
-          const nameValue = typeof item.name === "string" ? item.name.trim() : "";
-          const scannedSkuValue = typeof item.scannedSku === "string" ? item.scannedSku.trim() : "";
-          const quantityValue = Number(item.quantity);
-          const quantity = Number.isFinite(quantityValue) ? quantityValue : undefined;
-          return {
-            sku,
-            name: nameValue || undefined,
-            scannedSku: scannedSkuValue || undefined,
-            quantity
-          };
-        })
-        .filter((entry: TrackingCodeProductLink | null): entry is TrackingCodeProductLink => Boolean(entry))
-    : [];
-
   if (trimmedMovementId) {
     payload.stockMovementId = trimmedMovementId;
   }
-
-  if (sanitizedProducts.length) {
-    payload.products = sanitizedProducts.map((item) => {
-      const value: Record<string, any> = { sku: item.sku };
-      if (item.name) {
-        value.name = item.name;
-      }
-      if (typeof item.quantity === "number") {
-        value.quantity = item.quantity;
-      }
-      if (item.scannedSku) {
-        value.scannedSku = item.scannedSku;
-      }
-      return value;
-    });
-  }
-
-  const primarySku = trimmedSku || (sanitizedProducts[0]?.sku ?? "");
-  const primaryName = trimmedProductName || (sanitizedProducts[0]?.name ?? "");
-
-  if (primarySku) {
-    payload.productSku = primarySku;
-  }
-  if (primaryName) {
-    payload.productName = primaryName;
-  }
-
   const docRef = await firestore.addDoc(collectionRef, payload);
   const snapshot = await firestore.getDoc(docRef);
   if (!snapshot.exists()) {
@@ -682,12 +594,7 @@ export async function fetchMovementUsers(): Promise<MovementUserOption[]> {
   });
 }
 
-interface ProductMetadata {
-  name: string;
-  unitPrice: number;
-}
-
-async function loadProductMetadata(ids: string[]): Promise<Map<string, ProductMetadata>> {
+async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
   if (!ids.length) {
     return new Map();
   }
@@ -695,7 +602,7 @@ async function loadProductMetadata(ids: string[]): Promise<Map<string, ProductMe
   const bundle = await ensureFirebase();
   const { firestore, db } = bundle;
   const unique = Array.from(new Set(ids));
-  const map = new Map<string, ProductMetadata>();
+  const map = new Map<string, string>();
 
   await Promise.all(
     unique.map(async (id) => {
@@ -704,10 +611,7 @@ async function loadProductMetadata(ids: string[]): Promise<Map<string, ProductMe
         const snapshot = await firestore.getDoc(docRef);
         if (snapshot.exists()) {
           const data = snapshot.data();
-          map.set(id, {
-            name: data.name ?? "",
-            unitPrice: Number(data.unitPrice ?? 0)
-          });
+          map.set(id, data.name ?? "");
         }
       } catch (error) {
         console.error("Falha ao carregar nome do produto", error);
@@ -718,17 +622,422 @@ async function loadProductMetadata(ids: string[]): Promise<Map<string, ProductMe
   return map;
 }
 
+const TASK_OPTIONS_COLLECTION = "taskOptions";
+const TASK_ASSIGNMENTS_COLLECTION = "tasks";
+const DEFAULT_TASK_COLOR = "#0F172A";
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
+function normalizeHexColor(color?: string | null): string {
+  if (!color) {
+    return DEFAULT_TASK_COLOR;
+  }
+  const trimmed = color.trim();
+  if (!HEX_COLOR_PATTERN.test(trimmed)) {
+    return DEFAULT_TASK_COLOR;
+  }
+  if (trimmed.length === 4) {
+    return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`.toUpperCase();
+  }
+  return trimmed.toUpperCase();
+}
 
+function safeTrim(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
+function mapTaskOptionDoc(doc: any): TaskOption {
+  const data = doc?.data ? doc.data() : {};
+  const rawType = typeof data.type === "string" ? data.type : "";
+  const type: TaskOptionType =
+    rawType === "platform" || rawType === "account" || rawType === "task" ? rawType : "task";
+  const rawName = safeTrim(data.name ?? data.label);
+  const name = rawName.length ? rawName : "Item sem nome";
+  const colorValue = safeTrim(data.color);
+  const color = colorValue && HEX_COLOR_PATTERN.test(colorValue) ? normalizeHexColor(colorValue) : DEFAULT_TASK_COLOR;
+  return {
+    id: doc.id,
+    type,
+    name,
+    color
+  };
+}
 
+function toMillis(value: any): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (value && typeof value.toMillis === "function") {
+    return value.toMillis();
+  }
+  return undefined;
+}
 
+function mapTaskAssignmentSnapshot(doc: any): TaskAssignment {
+  const data = doc?.data ? doc.data() : {};
+  const statusValue = typeof data.status === "string" ? data.status : "pending";
+  const status: TaskStatus =
+    statusValue === "completed" || statusValue === "archived" || statusValue === "pending"
+      ? statusValue
+      : "pending";
+  const normalizeOptionalColor = (key: string): string | undefined => {
+    const value = safeTrim(data[key]);
+    if (!value) {
+      return undefined;
+    }
+    return HEX_COLOR_PATTERN.test(value) ? normalizeHexColor(value) : undefined;
+  };
+  const createdAt = toMillis(data.createdAt) ?? Date.now();
+  const assignment: TaskAssignment = {
+    id: doc.id,
+    taskOptionId: safeTrim(data.taskOptionId) || undefined,
+    taskLabel: safeTrim(data.taskLabel) || "Tarefa",
+    taskColor: normalizeOptionalColor("taskColor"),
+    platformId: safeTrim(data.platformId) || undefined,
+    platformLabel: safeTrim(data.platformLabel) || undefined,
+    platformColor: normalizeOptionalColor("platformColor"),
+    accountId: safeTrim(data.accountId) || undefined,
+    accountLabel: safeTrim(data.accountLabel) || undefined,
+    accountColor: normalizeOptionalColor("accountColor"),
+    productId: safeTrim(data.productId) || undefined,
+    productSku: safeTrim(data.productSku) || undefined,
+    productName: safeTrim(data.productName) || undefined,
+    userId: safeTrim(data.userId),
+    userName: safeTrim(data.userName) || "desconhecido",
+    assignedById: safeTrim(data.assignedById),
+    assignedByName: safeTrim(data.assignedByName) || "desconhecido",
+    status,
+    notes: safeTrim(data.notes) || undefined,
+    dueDate: toMillis(data.dueDate),
+    createdAt,
+    updatedAt: toMillis(data.updatedAt),
+    completedAt: toMillis(data.completedAt)
+  };
+  return assignment;
+}
 
+export async function fetchTaskOptions(type: TaskOptionType): Promise<TaskOption[]> {
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const ref = firestore.collection(db, TASK_OPTIONS_COLLECTION);
+  const snapshot = await firestore.getDocs(firestore.query(ref, firestore.where("type", "==", type)));
+  const items = snapshot.docs.map((doc: any) => mapTaskOptionDoc(doc));
+  items.sort((a: TaskOption, b: TaskOption) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
+  return items;
+}
 
+export interface TaskMetadata {
+  tasks: TaskOption[];
+  platforms: TaskOption[];
+  accounts: TaskOption[];
+}
 
+export async function fetchTaskMetadata(): Promise<TaskMetadata> {
+  const [tasks, platforms, accounts] = await Promise.all([
+    fetchTaskOptions("task"),
+    fetchTaskOptions("platform"),
+    fetchTaskOptions("account")
+  ]);
+  return { tasks, platforms, accounts };
+}
 
+export interface UpsertTaskOptionInput {
+  name: string;
+  color?: string;
+}
 
+export async function createTaskOption(
+  type: TaskOptionType,
+  input: UpsertTaskOptionInput
+): Promise<TaskOption> {
+  const sanitizedName = safeTrim(input.name);
+  if (!sanitizedName) {
+    throw new Error("Informe um nome valido.");
+  }
+  const color = normalizeHexColor(input.color);
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const collectionRef = firestore.collection(db, TASK_OPTIONS_COLLECTION);
+  const docRef = await firestore.addDoc(collectionRef, {
+    type,
+    name: sanitizedName,
+    color,
+    nameNormalized: sanitizedName.toLowerCase(),
+    createdAt: firestore.serverTimestamp(),
+    updatedAt: firestore.serverTimestamp()
+  });
+  const snapshot = await firestore.getDoc(docRef);
+  return mapTaskOptionDoc(snapshot);
+}
 
+export async function updateTaskOption(optionId: string, input: UpsertTaskOptionInput): Promise<void> {
+  const sanitizedId = safeTrim(optionId);
+  if (!sanitizedId) {
+    throw new Error("Opcao invalida.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const updates: Record<string, any> = {
+    updatedAt: firestore.serverTimestamp()
+  };
+  const trimmedName = safeTrim(input.name);
+  if (trimmedName) {
+    updates.name = trimmedName;
+    updates.nameNormalized = trimmedName.toLowerCase();
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "color")) {
+    updates.color = normalizeHexColor(input.color);
+  }
+  const docRef = firestore.doc(db, TASK_OPTIONS_COLLECTION, sanitizedId);
+  await firestore.updateDoc(docRef, updates);
+}
 
+export async function deleteTaskOption(optionId: string): Promise<void> {
+  const sanitizedId = safeTrim(optionId);
+  if (!sanitizedId) {
+    throw new Error("Opcao invalida.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const docRef = firestore.doc(db, TASK_OPTIONS_COLLECTION, sanitizedId);
+  await firestore.deleteDoc(docRef);
+}
 
+export interface NewTaskAssignmentInput {
+  taskOptionId?: string | null;
+  taskLabel: string;
+  taskColor?: string | null;
+  platformId?: string | null;
+  platformLabel?: string | null;
+  platformColor?: string | null;
+  accountId?: string | null;
+  accountLabel?: string | null;
+  accountColor?: string | null;
+  productId?: string | null;
+  productSku?: string | null;
+  productName?: string | null;
+  userId: string;
+  userName: string;
+  assignedById: string;
+  assignedByName: string;
+  notes?: string | null;
+  dueDate?: number | Date | null;
+}
 
+function buildDueDateTimestamp(firestoreModule: any, value?: number | Date | null) {
+  if (!value) {
+    return undefined;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    if (!Number.isFinite(time)) {
+      return undefined;
+    }
+    return firestoreModule.Timestamp.fromMillis(time);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return firestoreModule.Timestamp.fromMillis(value);
+  }
+  return undefined;
+}
+
+export async function createTaskAssignment(input: NewTaskAssignmentInput): Promise<TaskAssignment> {
+  const sanitizedUserId = safeTrim(input.userId);
+  const sanitizedAssignedBy = safeTrim(input.assignedById);
+  if (!sanitizedUserId) {
+    throw new Error("Funcionario invalido.");
+  }
+  if (!sanitizedAssignedBy) {
+    throw new Error("Responsavel invalido.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const payload: Record<string, any> = {
+    userId: sanitizedUserId,
+    userName: safeTrim(input.userName) || "desconhecido",
+    assignedById: sanitizedAssignedBy,
+    assignedByName: safeTrim(input.assignedByName) || "desconhecido",
+    status: "pending",
+    taskLabel: safeTrim(input.taskLabel) || "Tarefa",
+    createdAt: firestore.serverTimestamp(),
+    updatedAt: firestore.serverTimestamp()
+  };
+  if (safeTrim(input.taskOptionId)) {
+    payload.taskOptionId = safeTrim(input.taskOptionId);
+  }
+  if (input.taskColor) {
+    payload.taskColor = normalizeHexColor(input.taskColor);
+  }
+  if (safeTrim(input.platformId)) {
+    payload.platformId = safeTrim(input.platformId);
+  }
+  const platformLabel = safeTrim(input.platformLabel);
+  if (platformLabel) {
+    payload.platformLabel = platformLabel;
+  }
+  if (input.platformColor) {
+    payload.platformColor = normalizeHexColor(input.platformColor);
+  }
+  if (safeTrim(input.accountId)) {
+    payload.accountId = safeTrim(input.accountId);
+  }
+  const accountLabel = safeTrim(input.accountLabel);
+  if (accountLabel) {
+    payload.accountLabel = accountLabel;
+  }
+  if (input.accountColor) {
+    payload.accountColor = normalizeHexColor(input.accountColor);
+  }
+  const productId = safeTrim(input.productId);
+  if (productId) {
+    payload.productId = productId;
+  }
+  const productSku = safeTrim(input.productSku);
+  if (productSku) {
+    payload.productSku = productSku.toUpperCase();
+  }
+  const productName = safeTrim(input.productName);
+  if (productName) {
+    payload.productName = productName;
+  }
+  const notes = safeTrim(input.notes);
+  if (notes) {
+    payload.notes = notes;
+  }
+  const dueTimestamp = buildDueDateTimestamp(firestore, input.dueDate);
+  if (dueTimestamp) {
+    payload.dueDate = dueTimestamp;
+  }
+  const collectionRef = firestore.collection(db, TASK_ASSIGNMENTS_COLLECTION);
+  const docRef = await firestore.addDoc(collectionRef, payload);
+  const snapshot = await firestore.getDoc(docRef);
+  return mapTaskAssignmentSnapshot(snapshot);
+}
+
+export interface TaskQueryOptions {
+  status?: TaskStatus | "all";
+  assignedTo?: string;
+  platformId?: string;
+  accountId?: string;
+  limit?: number;
+}
+
+function applyTaskFilters(list: TaskAssignment[], options: TaskQueryOptions): TaskAssignment[] {
+  let filtered = [...list];
+  if (options.status && options.status !== "all") {
+    filtered = filtered.filter((item) => item.status === options.status);
+  }
+  const assigned = safeTrim(options.assignedTo);
+  if (assigned) {
+    filtered = filtered.filter((item) => item.userId === assigned);
+  }
+  const platformId = safeTrim(options.platformId);
+  if (platformId) {
+    filtered = filtered.filter((item) => item.platformId === platformId);
+  }
+  const accountId = safeTrim(options.accountId);
+  if (accountId) {
+    filtered = filtered.filter((item) => item.accountId === accountId);
+  }
+  return filtered;
+}
+
+export async function fetchTasksForAdmin(options: TaskQueryOptions = {}): Promise<TaskAssignment[]> {
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const ref = firestore.collection(db, TASK_ASSIGNMENTS_COLLECTION);
+  const limitValue = options.limit && Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(500, Math.floor(options.limit)))
+    : 400;
+  const querySnapshot = await firestore.getDocs(
+    firestore.query(ref, firestore.orderBy("createdAt", "desc"), firestore.limit(limitValue))
+  );
+  const list = querySnapshot.docs.map((doc: any) => mapTaskAssignmentSnapshot(doc));
+  return applyTaskFilters(list, options);
+}
+
+export async function fetchTasksForUser(
+  userId: string,
+  options: TaskQueryOptions = {}
+): Promise<TaskAssignment[]> {
+  const sanitizedUserId = safeTrim(userId);
+  if (!sanitizedUserId) {
+    return [];
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const ref = firestore.collection(db, TASK_ASSIGNMENTS_COLLECTION);
+  const query = firestore.query(ref, firestore.where("userId", "==", sanitizedUserId));
+  const snapshot = await firestore.getDocs(query);
+  const list: TaskAssignment[] = snapshot.docs.map((doc: any) => mapTaskAssignmentSnapshot(doc));
+  list.sort((a: TaskAssignment, b: TaskAssignment) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return applyTaskFilters(list, options);
+}
+
+export async function updateTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
+  const sanitizedId = safeTrim(taskId);
+  if (!sanitizedId) {
+    throw new Error("Tarefa invalida.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const docRef = firestore.doc(db, TASK_ASSIGNMENTS_COLLECTION, sanitizedId);
+  const payload: Record<string, any> = {
+    status,
+    updatedAt: firestore.serverTimestamp()
+  };
+  if (status === "completed") {
+    payload.completedAt = firestore.serverTimestamp();
+  } else {
+    payload.completedAt = firestore.deleteField();
+  }
+  await firestore.updateDoc(docRef, payload);
+}
+
+export interface UpdateTaskDetailsInput {
+  notes?: string | null;
+  dueDate?: number | Date | null;
+}
+
+export async function updateTaskDetails(taskId: string, updates: UpdateTaskDetailsInput): Promise<void> {
+  const sanitizedId = safeTrim(taskId);
+  if (!sanitizedId) {
+    throw new Error("Tarefa invalida.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const docRef = firestore.doc(db, TASK_ASSIGNMENTS_COLLECTION, sanitizedId);
+  const payload: Record<string, any> = {
+    updatedAt: firestore.serverTimestamp()
+  };
+  if (Object.prototype.hasOwnProperty.call(updates, "notes")) {
+    const notes = safeTrim(updates.notes);
+    if (notes) {
+      payload.notes = notes;
+    } else {
+      payload.notes = firestore.deleteField();
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "dueDate")) {
+    const dueTimestamp = buildDueDateTimestamp(firestore, updates.dueDate);
+    if (dueTimestamp) {
+      payload.dueDate = dueTimestamp;
+    } else {
+      payload.dueDate = firestore.deleteField();
+    }
+  }
+  await firestore.updateDoc(docRef, payload);
+}
+
+export async function deleteTaskAssignment(taskId: string): Promise<void> {
+  const sanitizedId = safeTrim(taskId);
+  if (!sanitizedId) {
+    throw new Error("Tarefa invalida.");
+  }
+  const bundle = await ensureFirebase();
+  const { firestore, db } = bundle;
+  const docRef = firestore.doc(db, TASK_ASSIGNMENTS_COLLECTION, sanitizedId);
+  await firestore.deleteDoc(docRef);
+}
