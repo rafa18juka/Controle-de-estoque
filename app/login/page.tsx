@@ -32,7 +32,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (user) {
-      router.replace(user.role === "admin" ? "/admin/dashboard" : "/scan");
+      router.replace(user.role === "admin" ? "/admin/dashboard" : "/tasks");
     }
   }, [user, router]);
 
