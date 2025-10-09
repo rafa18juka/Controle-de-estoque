@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, ScanLine, BarChart2, Package, LogOut, History, QrCode } from "lucide-react";
+import { Menu, ScanLine, BarChart2, Package, LogOut, History, QrCode, ClipboardList } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -19,18 +19,21 @@ export function Navbar() {
 
   const links = useMemo(() => {
     if (!user) return [] as Array<{ href: string; label: string; icon: ReactNode }>;
-    const base = [
-      { href: "/scan", label: "Escanear", icon: <ScanLine size={16} /> },
-      { href: "/history", label: "Historico", icon: <History size={16} /> }
-    ];
     if (user.role === "admin") {
-      base.push(
+      return [
+        { href: "/scan", label: "Escanear", icon: <ScanLine size={16} /> },
+        { href: "/history", label: "Historico", icon: <History size={16} /> },
+        { href: "/tasks", label: "Tarefas", icon: <ClipboardList size={16} /> },
         { href: "/admin/dashboard", label: "Dashboard", icon: <BarChart2 size={16} /> },
         { href: "/admin/rastreios", label: "Rastreios", icon: <QrCode size={16} /> },
         { href: "/admin/estoque", label: "Estoque", icon: <Package size={16} /> }
-      );
+      ];
     }
-    return base;
+    return [
+      { href: "/tasks", label: "Tarefas", icon: <ClipboardList size={16} /> },
+      { href: "/scan", label: "Escanear", icon: <ScanLine size={16} /> },
+      { href: "/history", label: "Historico", icon: <History size={16} /> }
+    ];
   }, [user]);
 
   const handleSignOut = async () => {
@@ -45,7 +48,7 @@ export function Navbar() {
   return (
     <header className="fixed inset-x-0 top-0 z-40 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
       <div className="container mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <Link href={user?.role === "admin" ? "/admin/dashboard" : "/scan"} className="flex items-center gap-2">
+        <Link href={user?.role === "admin" ? "/admin/dashboard" : "/tasks"} className="flex items-center gap-2">
           <span className="rounded-lg bg-slate-900 px-3 py-1 text-sm font-semibold uppercase tracking-wide text-white">
             Mustafar Variedades
           </span>
