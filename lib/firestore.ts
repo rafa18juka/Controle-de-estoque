@@ -198,6 +198,8 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
 
     const newQuantity = currentQuantity - effectiveQty;
     const newTotalValue = Number((newQuantity * unitPrice).toFixed(2));
+    const movementUnitPrice = Number.isFinite(unitPrice) ? Number(unitPrice.toFixed(2)) : 0;
+    const movementTotalValue = Number((effectiveQty * movementUnitPrice).toFixed(2));
 
     transaction.update(productRef, {
       quantity: newQuantity,
@@ -216,6 +218,8 @@ export async function processStockOut(input: StockOutInput): Promise<StockOutRes
       userId,
       userName: userName || "desconhecido",
       timestamp: firestore.serverTimestamp(),
+      unitPrice: movementUnitPrice,
+      totalValue: movementTotalValue,
       // KIT-SKU START
       parentSku: product.sku,
       scannedSku: sanitizedSku,
@@ -324,7 +328,7 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
     const timestampValue = data.timestamp && typeof data.timestamp.toMillis === "function"
       ? data.timestamp.toMillis()
       : Number(data.timestamp ?? 0);
-    return {
+    const movement: StockMovementWithProduct = {
       id: doc.id,
       productId: typeof data.productId === "string" ? data.productId : "",
       sku: typeof data.sku === "string" ? data.sku : "",
@@ -338,6 +342,15 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
       multiplier: typeof data.multiplier === "number" ? data.multiplier : undefined,
       effectiveQty: typeof data.effectiveQty === "number" ? data.effectiveQty : undefined
     };
+    const rawUnitPrice = Number(data.unitPrice);
+    if (Number.isFinite(rawUnitPrice)) {
+      movement.unitPrice = Number(rawUnitPrice.toFixed(2));
+    }
+    const rawTotalValue = Number(data.totalValue);
+    if (Number.isFinite(rawTotalValue)) {
+      movement.totalValue = Number(Math.abs(rawTotalValue).toFixed(2));
+    }
+    return movement;
   });
 
   const productIds = Array.from(
@@ -348,12 +361,32 @@ export async function fetchStockMovements(filters: StockMovementsFilters): Promi
     )
   );
 
-  const productNames = await loadProductNames(productIds);
+  const productDetails = await loadProductSummaries(productIds);
 
-  const enriched = movements.map((movement) => ({
-    ...movement,
-    productName: productNames.get(movement.productId ?? "") ?? ""
-  }));
+  const enriched = movements.map((movement) => {
+    const details = productDetails.get(movement.productId ?? "");
+    const enrichedMovement: StockMovementWithProduct = {
+      ...movement,
+      productName: details?.name ?? ""
+    };
+
+    if (enrichedMovement.unitPrice === undefined && details?.unitPrice !== undefined) {
+      enrichedMovement.unitPrice = Number(details.unitPrice.toFixed(2));
+    }
+
+    if (
+      (enrichedMovement.totalValue === undefined || enrichedMovement.totalValue === 0) &&
+      enrichedMovement.unitPrice !== undefined
+    ) {
+      const quantityForValue = Math.abs(Number(enrichedMovement.effectiveQty ?? enrichedMovement.qty ?? 0));
+      const computedTotal = Number((quantityForValue * enrichedMovement.unitPrice).toFixed(2));
+      if (computedTotal > 0) {
+        enrichedMovement.totalValue = computedTotal;
+      }
+    }
+
+    return enrichedMovement;
+  });
 
   const nextCursor = snapshot.docs.length === pageLimit ? snapshot.docs[snapshot.docs.length - 1] : null;
 
@@ -594,7 +627,12 @@ export async function fetchMovementUsers(): Promise<MovementUserOption[]> {
   });
 }
 
-async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
+interface ProductSummary {
+  name: string;
+  unitPrice?: number;
+}
+
+async function loadProductSummaries(ids: string[]): Promise<Map<string, ProductSummary>> {
   if (!ids.length) {
     return new Map();
   }
@@ -602,7 +640,7 @@ async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
   const bundle = await ensureFirebase();
   const { firestore, db } = bundle;
   const unique = Array.from(new Set(ids));
-  const map = new Map<string, string>();
+  const map = new Map<string, ProductSummary>();
 
   await Promise.all(
     unique.map(async (id) => {
@@ -611,7 +649,14 @@ async function loadProductNames(ids: string[]): Promise<Map<string, string>> {
         const snapshot = await firestore.getDoc(docRef);
         if (snapshot.exists()) {
           const data = snapshot.data();
-          map.set(id, data.name ?? "");
+          const summary: ProductSummary = {
+            name: typeof data.name === "string" ? data.name : ""
+          };
+          const rawUnitPrice = Number(data.unitPrice);
+          if (Number.isFinite(rawUnitPrice)) {
+            summary.unitPrice = Number(rawUnitPrice.toFixed(2));
+          }
+          map.set(id, summary);
         }
       } catch (error) {
         console.error("Falha ao carregar nome do produto", error);
