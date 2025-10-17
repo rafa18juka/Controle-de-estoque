@@ -32,9 +32,15 @@ import { ensureFirebase } from "@/lib/firebase-client";
 import { fetchMovementUsers, type MovementUserOption } from "@/lib/firestore";
 import type { Product, StockMovement } from "@/lib/types";
 import { currency, formatDay } from "@/lib/format";
+import type { ProductsBarDatum } from "@/components/charts/products-bar";
 
 type MovementRange = "day" | "week" | "month" | "year";
-type ProductDonutMetric = "value" | "quantity" | "sales";
+type DashboardTab = "stock" | "users";
+type ProductLine = "A" | "B" | "C";
+type IdleProductsMetric = "quantity" | "value";
+type TopProductsMetric = "value" | "quantity" | "sales";
+type TopProductsPeriod = "day" | "week" | "month";
+type WaterfallRange = "week" | "month";
 
 interface UserActivitySummary {
   id: string;
@@ -55,6 +61,8 @@ interface DashboardUserOption {
 }
 
 interface ProductSalesAggregate {
+  key: string;
+  productId?: string;
   name: string;
   totalValue: number;
   totalQuantity: number;
@@ -114,6 +122,68 @@ function deriveUserDisplayName(rawName: string | null | undefined, userId: strin
   return { name, tokens: Array.from(tokens) };
 }
 
+type MovementWithProduct = StockMovement & { product?: Product | undefined };
+
+function resolveProductKey(movement: MovementWithProduct): string {
+  return (
+    movement.product?.id ||
+    movement.productId ||
+    movement.product?.sku ||
+    movement.sku ||
+    movement.product?.name ||
+    movement.id
+  );
+}
+
+function resolveProductName(movement: MovementWithProduct): string {
+  return (
+    movement.product?.name?.trim() ||
+    movement.product?.sku ||
+    movement.sku ||
+    movement.productId ||
+    movement.id ||
+    "Sem produto"
+  );
+}
+
+function aggregateProductSales(movements: MovementWithProduct[]): ProductSalesAggregate[] {
+  if (!movements.length) {
+    return [];
+  }
+
+  const totals = new Map<string, ProductSalesAggregate>();
+
+  for (const movement of movements) {
+    const rawQty = Number(movement.effectiveQty ?? movement.qty ?? 0);
+    const quantity = Number.isFinite(rawQty) ? Math.abs(rawQty) : 0;
+    const unitPrice = Number(movement.product?.unitPrice ?? movement.unitPrice ?? 0);
+    const value = quantity * unitPrice;
+    const key = resolveProductKey(movement);
+    const name = resolveProductName(movement);
+
+    const existing = totals.get(key) ?? {
+      key,
+      productId: movement.product?.id ?? movement.productId ?? undefined,
+      name,
+      totalValue: 0,
+      totalQuantity: 0,
+      saleCount: 0
+    };
+
+    if (!existing.name || existing.name === "Sem produto") {
+      existing.name = name;
+    }
+
+    existing.totalQuantity += quantity;
+    existing.totalValue += value;
+    existing.saleCount += 1;
+
+    totals.set(key, existing);
+  }
+
+  return Array.from(totals.values());
+}
+
 const BarTimeseries = dynamic(
   () => import("@/components/charts/bar-timeseries").then((mod) => mod.BarTimeseries),
   { ssr: false }
@@ -123,15 +193,45 @@ const UserComparisonChart = dynamic(
   () => import("@/components/charts/user-comparison").then((mod) => mod.UserComparisonChart),
   { ssr: false }
 );
+const ProductsBarChart = dynamic(
+  () => import("@/components/charts/products-bar").then((mod) => mod.ProductsBarChart),
+  { ssr: false }
+);
+const LineTimeseries = dynamic(
+  () => import("@/components/charts/line-timeseries").then((mod) => mod.LineTimeseries),
+  { ssr: false }
+);
 
 // Keep supplier donut legend compact when many fornecedores.
 const SUPPLIER_DONUT_MAX_SLICES = 8;
-const PRODUCT_DONUT_MAX_SLICES = 8;
 
-const PRODUCT_METRIC_OPTIONS: { value: ProductDonutMetric; label: string }[] = [
+const PRODUCT_LINE_OPTIONS: Array<{ value: "all" | ProductLine; label: string }> = [
+  { value: "all", label: "Todas as linhas" },
+  { value: "A", label: "Linha A" },
+  { value: "B", label: "Linha B" },
+  { value: "C", label: "Linha C" }
+];
+
+const IDLE_METRIC_OPTIONS: Array<{ value: IdleProductsMetric; label: string }> = [
+  { value: "quantity", label: "Por unidades" },
+  { value: "value", label: "Por valor" }
+];
+
+const TOP_PRODUCTS_METRIC_OPTIONS: Array<{ value: TopProductsMetric; label: string }> = [
   { value: "value", label: "Por valor" },
   { value: "quantity", label: "Por unidades" },
   { value: "sales", label: "Por vendas" }
+];
+
+const TOP_PRODUCTS_PERIOD_OPTIONS: Array<{ value: TopProductsPeriod; label: string }> = [
+  { value: "day", label: "Ultimas 24h" },
+  { value: "week", label: "Ultimos 7 dias" },
+  { value: "month", label: "Ultimos 30 dias" }
+];
+
+const WATERFALL_RANGE_OPTIONS: Array<{ value: WaterfallRange; label: string }> = [
+  { value: "week", label: "Ultima semana" },
+  { value: "month", label: "Ultimo mes" }
 ];
 
 const MOVEMENT_RANGE_OPTIONS: { value: MovementRange; label: string }[] = [
@@ -159,11 +259,16 @@ function DashboardContent() {
   const [supplierFilter, setSupplierFilter] = useState<string>("");
   const [productFilter, setProductFilter] = useState<string>("");
   const [movementRange, setMovementRange] = useState<MovementRange>("day");
-  const [productDonutMetric, setProductDonutMetric] = useState<ProductDonutMetric>("value");
+  const [productLineFilter, setProductLineFilter] = useState<"all" | ProductLine>("all");
+  const [idleProductsMetric, setIdleProductsMetric] = useState<IdleProductsMetric>("quantity");
+  const [topProductsMetric, setTopProductsMetric] = useState<TopProductsMetric>("value");
+  const [topProductsPeriod, setTopProductsPeriod] = useState<TopProductsPeriod>("week");
+  const [waterfallRange, setWaterfallRange] = useState<WaterfallRange>("week");
   const [userSearch, setUserSearch] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [userStartDate, setUserStartDate] = useState("");
   const [userEndDate, setUserEndDate] = useState("");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("stock");
   const autoSelectedUsersRef = useRef(false);
 
   useEffect(() => {
@@ -241,14 +346,16 @@ function DashboardContent() {
     });
   }, [products, categoryFilter, supplierFilter, productFilter]);
 
-  const productMap = useMemo(() => {
+  const baseProductMap = useMemo(() => {
     return new Map(filteredProducts.map((product) => [product.id, product]));
   }, [filteredProducts]);
 
   const filteredMovements = useMemo(() => {
-    if (!categoryFilter && !supplierFilter && !productFilter) return movements;
-    return movements.filter((movement) => productMap.has(movement.productId));
-  }, [movements, productMap, categoryFilter, supplierFilter, productFilter]);
+    if (!categoryFilter && !supplierFilter && !productFilter) {
+      return movements;
+    }
+    return movements.filter((movement) => baseProductMap.has(movement.productId));
+  }, [movements, baseProductMap, categoryFilter, supplierFilter, productFilter]);
 
   const movementsWithProducts = useMemo(
     () =>
@@ -256,46 +363,91 @@ function DashboardContent() {
         .filter((movement) => movement.type === "out")
         .map((movement) => ({
           ...movement,
-          product: productMap.get(movement.productId)
+          product: baseProductMap.get(movement.productId)
         })),
-    [filteredMovements, productMap]
+    [filteredMovements, baseProductMap]
   );
 
-  const productSalesAggregates = useMemo<ProductSalesAggregate[]>(() => {
-    if (!movementsWithProducts.length) {
-      return [];
+  const productSalesAggregatesAll = useMemo<ProductSalesAggregate[]>(() => aggregateProductSales(movementsWithProducts), [movementsWithProducts]);
+
+  const productLineAssignments = useMemo(() => {
+    const lineMap = new Map<string, ProductLine>();
+    if (!productSalesAggregatesAll.length) {
+      products.forEach((product) => {
+        if (product.id) {
+          lineMap.set(product.id, "C");
+        }
+      });
+      return lineMap;
     }
 
-    const totals = new Map<string, ProductSalesAggregate>();
+    const sorted = [...productSalesAggregatesAll].sort((a, b) => b.totalQuantity - a.totalQuantity);
+    const totalQuantity = sorted.reduce((accumulator, item) => accumulator + item.totalQuantity, 0);
 
-    for (const movement of movementsWithProducts) {
-      const rawQty = Number(movement.effectiveQty ?? movement.qty ?? 0);
-      const quantity = Number.isFinite(rawQty) ? Math.abs(rawQty) : 0;
-      const unitPrice = movement.product?.unitPrice ?? 0;
-      const value = quantity * unitPrice;
-      const productName = (movement.product?.name?.trim() || movement.product?.sku || movement.sku || movement.productId || "Sem produto");
-      const productKey = movement.product?.id || movement.productId || movement.sku || productName;
+    if (totalQuantity <= 0) {
+      products.forEach((product) => {
+        if (product.id) {
+          lineMap.set(product.id, "C");
+        }
+      });
+      return lineMap;
+    }
 
-      const existing = totals.get(productKey) ?? {
-        name: productName,
-        totalValue: 0,
-        totalQuantity: 0,
-        saleCount: 0
-      };
-
-      if (!existing.name || existing.name === "Sem produto") {
-        existing.name = productName;
+    let cumulative = 0;
+    for (const aggregate of sorted) {
+      cumulative += aggregate.totalQuantity;
+      const ratio = cumulative / totalQuantity;
+      let line: ProductLine = "C";
+      if (ratio <= 0.8) {
+        line = "A";
+      } else if (ratio <= 0.95) {
+        line = "B";
       }
-
-      existing.totalQuantity += quantity;
-      existing.totalValue += value;
-      existing.saleCount += 1;
-
-      totals.set(productKey, existing);
+      lineMap.set(aggregate.key, line);
+      if (aggregate.productId) {
+        lineMap.set(aggregate.productId, line);
+      }
     }
 
-    return Array.from(totals.values());
-  }, [movementsWithProducts]);
+    products.forEach((product) => {
+      if (product.id && !lineMap.has(product.id)) {
+        lineMap.set(product.id, "C");
+      }
+    });
+
+    return lineMap;
+  }, [productSalesAggregatesAll, products]);
+
+  const visibleProducts = useMemo(() => {
+    if (productLineFilter === "all") {
+      return filteredProducts;
+    }
+    return filteredProducts.filter(
+      (product) => (productLineAssignments.get(product.id) ?? "C") === productLineFilter
+    );
+  }, [filteredProducts, productLineFilter, productLineAssignments]);
+
+  const productMap = useMemo(() => {
+    return new Map(visibleProducts.map((product) => [product.id, product]));
+  }, [visibleProducts]);
+
+  const lineFilteredMovements = useMemo(() => {
+    const map = productMap;
+    if (productLineFilter === "all") {
+      return movementsWithProducts.map((movement) => ({
+        ...movement,
+        product: map.get(movement.productId) ?? movement.product
+      }));
+    }
+    return movementsWithProducts
+      .filter((movement) => (productLineAssignments.get(resolveProductKey(movement)) ?? "C") === productLineFilter)
+      .map((movement) => ({
+        ...movement,
+        product: map.get(movement.productId) ?? movement.product
+      }));
+  }, [movementsWithProducts, productLineAssignments, productLineFilter, productMap]);
+
+  const productSalesAggregates = useMemo<ProductSalesAggregate[]>(() => aggregateProductSales(lineFilteredMovements), [lineFilteredMovements]);
 
   const userDirectory = useMemo(() => {
     const map = new Map<string, MovementUserOption>();
@@ -529,16 +681,16 @@ function DashboardContent() {
     }
   };
 
-  const totalItems = filteredProducts.reduce((acc, product) => acc + (product.quantity ?? 0), 0);
-  const totalValue = filteredProducts.reduce((acc, product) => acc + (product.totalValue ?? 0), 0);
+  const totalItems = visibleProducts.reduce((acc, product) => acc + (product.quantity ?? 0), 0);
+  const totalValue = visibleProducts.reduce((acc, product) => acc + (product.totalValue ?? 0), 0);
 
-  const valueByCategory = filteredProducts.reduce<Record<string, number>>((acc, product) => {
+  const valueByCategory = visibleProducts.reduce<Record<string, number>>((acc, product) => {
     const key = product.category ?? "Sem categoria";
     acc[key] = (acc[key] ?? 0) + (product.totalValue ?? 0);
     return acc;
   }, {});
 
-  const valueBySupplier = filteredProducts.reduce<Record<string, number>>((acc, product) => {
+  const valueBySupplier = visibleProducts.reduce<Record<string, number>>((acc, product) => {
     const key = product.supplier ?? "Sem fornecedor";
     acc[key] = (acc[key] ?? 0) + (product.totalValue ?? 0);
     return acc;
@@ -553,11 +705,15 @@ function DashboardContent() {
   };
 
   const windowStats = (start: number) => {
-    const relevant = movementsWithProducts.filter((movement) => movement.timestamp >= start);
-    const totalQty = relevant.reduce((acc, movement) => acc + movement.qty, 0);
+    const relevant = lineFilteredMovements.filter((movement) => movement.timestamp >= start);
+    const totalQty = relevant.reduce(
+      (acc, movement) => acc + Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0)),
+      0
+    );
     const totalVal = relevant.reduce((acc, movement) => {
       const unitPrice = movement.product?.unitPrice ?? 0;
-      return acc + unitPrice * movement.qty;
+      const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+      return acc + unitPrice * quantity;
     }, 0);
     return { totalQty, totalVal };
   };
@@ -617,11 +773,12 @@ function DashboardContent() {
       let totalQty = 0;
       let totalVal = 0;
 
-      for (const movement of movementsWithProducts) {
+      for (const movement of lineFilteredMovements) {
         if (movement.timestamp >= start && movement.timestamp < end) {
-          totalQty += movement.qty;
+          const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
           const unitPrice = movement.product?.unitPrice ?? 0;
-          totalVal += unitPrice * movement.qty;
+          totalQty += quantity;
+          totalVal += unitPrice * quantity;
         }
       }
 
@@ -632,7 +789,7 @@ function DashboardContent() {
         quantity: totalQty
       };
     });
-  }, [movementsWithProducts, movementRange]);
+  }, [lineFilteredMovements, movementRange]);
 
   const categoryDonutData = useMemo(
     () =>
@@ -669,81 +826,207 @@ function DashboardContent() {
     ];
   }, [valueBySupplier]);
 
-  const productDonutData = useMemo(() => {
-    if (!productSalesAggregates.length) {
+  const idleProductsData = useMemo<ProductsBarDatum[]>(() => {
+    if (!visibleProducts.length) {
       return [];
     }
 
-    const entries = productSalesAggregates
+    const aggregateByProductId = new Map<string, ProductSalesAggregate>();
+    for (const aggregate of productSalesAggregates) {
+      const id = aggregate.productId ?? aggregate.key;
+      if (id) {
+        aggregateByProductId.set(id, aggregate);
+      }
+    }
+
+    const dataset: ProductsBarDatum[] = [];
+
+    visibleProducts.forEach((product) => {
+      const productId = product.id ?? "";
+      const aggregate = productId ? aggregateByProductId.get(productId) : undefined;
+      const totalQuantityDispatched = aggregate?.totalQuantity ?? 0;
+
+      if (totalQuantityDispatched > 0) {
+        return;
+      }
+
+      const stockQuantity = Number(product.quantity ?? 0);
+      const stockValue = Number(
+        product.totalValue ??
+          (Number(product.quantity ?? 0) * Number(product.unitPrice ?? 0))
+      );
+
+      const metricValue = idleProductsMetric === "value" ? stockValue : stockQuantity;
+      const helper =
+        idleProductsMetric === "value"
+          ? `${stockQuantity.toLocaleString("pt-BR")} un`
+          : currency(stockValue);
+
+      const displayName = product.name ?? product.sku ?? (productId || "Produto");
+
+      dataset.push({
+        name: displayName,
+        value: Number(metricValue) || 0,
+        helper
+      });
+    });
+
+    return dataset
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 20);
+  }, [visibleProducts, productSalesAggregates, idleProductsMetric]);
+
+  const topProductsData = useMemo<ProductsBarDatum[]>(() => {
+    if (!lineFilteredMovements.length) {
+      return [];
+    }
+
+    const reference = new Date();
+    const periodStart =
+      topProductsPeriod === "day"
+        ? startOfDay(reference).getTime()
+        : topProductsPeriod === "week"
+          ? startOfWeek(reference).getTime()
+          : startOfMonth(reference).getTime();
+
+    const relevant = lineFilteredMovements.filter((movement) => movement.timestamp >= periodStart);
+    const aggregates = aggregateProductSales(relevant);
+
+    return aggregates
       .map((aggregate) => {
-        const metricValue =
-          productDonutMetric === "value"
-            ? aggregate.totalValue
-            : productDonutMetric === "quantity"
-            ? aggregate.totalQuantity
-            : aggregate.saleCount;
+        const { totalValue, totalQuantity, saleCount, name } = aggregate;
+        let metricValue = totalValue;
+        let helper = `${totalQuantity.toLocaleString("pt-BR")} un`;
+
+        if (topProductsMetric === "quantity") {
+          metricValue = totalQuantity;
+          helper = currency(totalValue);
+        } else if (topProductsMetric === "sales") {
+          metricValue = saleCount;
+          helper = `${totalQuantity.toLocaleString("pt-BR")} un`;
+        }
 
         return {
-          name: aggregate.name,
-          value: metricValue
+          name,
+          value: Number(metricValue) || 0,
+          helper
         };
       })
       .filter((item) => item.value > 0)
-      .sort((a, b) => b.value - a.value);
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 20);
+  }, [lineFilteredMovements, topProductsMetric, topProductsPeriod]);
 
-    if (entries.length <= PRODUCT_DONUT_MAX_SLICES) {
-      return entries;
+  const topProductsValueFormatter = useMemo(() => {
+    if (topProductsMetric === "value") {
+      return currency;
+    }
+    if (topProductsMetric === "sales") {
+      return (value: number) => `${value.toLocaleString("pt-BR")} mov.`;
+    }
+    return (value: number) => value.toLocaleString("pt-BR");
+  }, [topProductsMetric]);
+
+  const idleProductsValueFormatter = useMemo(() => {
+    return idleProductsMetric === "value" ? currency : (value: number) => value.toLocaleString("pt-BR");
+  }, [idleProductsMetric]);
+
+  const stockValueSeries = useMemo(() => {
+    const reference = new Date();
+    const days = waterfallRange === "week" ? 7 : 30;
+    const segments: Array<{
+      label: string;
+      start: number;
+      end: number;
+      date: Date;
+      shippedValue: number;
+    }> = [];
+
+    for (let index = days - 1; index >= 0; index -= 1) {
+      const day = startOfDay(subDays(reference, index));
+      segments.push({
+        label: format(day, "dd/MM", { locale: ptBR }),
+        start: day.getTime(),
+        end: addDays(day, 1).getTime(),
+        date: day,
+        shippedValue: 0
+      });
     }
 
-    const limit = Math.max(PRODUCT_DONUT_MAX_SLICES - 1, 1);
-    const topProducts = entries.slice(0, limit);
-    const remaining = entries.slice(limit);
-    const othersTotal = remaining.reduce((accumulator, item) => accumulator + item.value, 0);
-
-    if (othersTotal <= 0) {
-      return topProducts;
+    if (!segments.length) {
+      return [];
     }
 
-    return [
-      ...topProducts,
+    for (const movement of lineFilteredMovements) {
+      if (typeof movement.timestamp !== "number") {
+        continue;
+      }
+      for (const segment of segments) {
+        if (movement.timestamp >= segment.start && movement.timestamp < segment.end) {
+          const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+          const unitPrice = movement.product?.unitPrice ?? 0;
+          segment.shippedValue += quantity * unitPrice;
+          break;
+        }
+      }
+    }
+
+    const totalReduction = segments.reduce((accumulator, segment) => accumulator + segment.shippedValue, 0);
+    const startValue = totalValue + totalReduction;
+
+    let running = startValue;
+    const series: Array<{ label: string; date: string; value: number }> = [
       {
-        name: `Outros (+${remaining.length})`,
-        value: othersTotal
+        label: "Inicio",
+        date: subDays(segments[0].date, 1).toISOString(),
+        value: Math.max(startValue, 0)
       }
     ];
-  }, [productSalesAggregates, productDonutMetric]);
 
-  const productDonutValueFormatter = useMemo(() => {
-    if (productDonutMetric === "quantity") {
-      return (value: number) => `${value.toLocaleString("pt-BR")} un`;
-    }
+    segments.forEach((segment) => {
+      running -= segment.shippedValue;
+      series.push({
+        label: segment.label,
+        date: segment.date.toISOString(),
+        value: Math.max(running, 0)
+      });
+    });
 
-    if (productDonutMetric === "sales") {
-      return (value: number) => `${value.toLocaleString("pt-BR")} vendas`;
-    }
-
-    return currency;
-  }, [productDonutMetric]);
-
-  const renderProductMetricSelector = () => (
-    <Select
-      id="dashboard-product-metric"
-      value={productDonutMetric}
-      onChange={(event) => setProductDonutMetric(event.target.value as ProductDonutMetric)}
-      aria-label="Metrica dos produtos"
-      className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
-    >
-      {PRODUCT_METRIC_OPTIONS.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </Select>
-  );
+    return series;
+  }, [lineFilteredMovements, waterfallRange, totalValue]);
 
   const movementRangeLabel = MOVEMENT_RANGE_OPTIONS.find((option) => option.value === movementRange)?.label ?? "";
-  const hasActiveFilters =
-    Boolean(categoryFilter || supplierFilter || productFilter || hasUserFilters) || movementRange !== "day";
+  const hasStockFilters =
+    Boolean(categoryFilter || supplierFilter || productFilter || productLineFilter !== "all") ||
+    movementRange !== "day";
+  const hasCurrentTabFilters = activeTab === "stock" ? hasStockFilters : hasUserFilters;
+  const tabCopy =
+    activeTab === "stock"
+      ? {
+          title: "Dashboard de Estoque",
+          description: "Visao geral do estoque atual, valor em prateleira e historico de saidas."
+        }
+      : {
+          title: "Dashboard de Usuarios",
+          description: "Acompanhe a atividade da equipe, compare saidas e identifique destaques."
+        };
+
+  const clearStockFilters = () => {
+    setCategoryFilter("");
+    setSupplierFilter("");
+    setProductFilter("");
+    setMovementRange("day");
+    setProductLineFilter("all");
+  };
+
+  const handleClearFilters = () => {
+    if (activeTab === "stock") {
+      clearStockFilters();
+    } else {
+      handleClearUserFilters(false);
+    }
+  };
 
   const handleToggleUser = (userId: string) => {
     setSelectedUserIds((prev) => {
@@ -765,109 +1048,161 @@ function DashboardContent() {
     <div className="space-y-8">
       <header>
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">Dashboard de Estoque</h1>
-              <p className="text-sm text-slate-500">
-                Visao geral do estoque atual, valor em prateleira e historico de saidas.
-              </p>
+              <h1 className="text-3xl font-bold text-slate-900">{tabCopy.title}</h1>
+              <p className="text-sm text-slate-500">{tabCopy.description}</p>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="self-start rounded-lg px-3 text-sm font-semibold text-slate-600 hover:text-slate-900"
-              onClick={() => {
-                setCategoryFilter("");
-                setSupplierFilter("");
-                setProductFilter("");
-                setMovementRange("day");
-                handleClearUserFilters(false);
-              }}
-              disabled={!hasActiveFilters}
-            >
-              Limpar filtros
-            </Button>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="space-y-1">
-              <Label htmlFor="dashboard-category" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Categoria
-              </Label>
-              <Select
-                id="dashboard-category"
-                value={categoryFilter}
-                onChange={(event) => setCategoryFilter(event.target.value)}
-                className="min-w-[200px]"
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
+              <div className="inline-flex rounded-full bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("stock")}
+                  className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
+                    activeTab === "stock"
+                      ? "bg-white text-slate-900 shadow"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Estoque
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("users")}
+                  className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
+                    activeTab === "users"
+                      ? "bg-white text-slate-900 shadow"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Usuarios
+                </button>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="self-start rounded-lg px-3 text-sm font-semibold text-slate-600 hover:text-slate-900"
+                onClick={handleClearFilters}
+                disabled={!hasCurrentTabFilters}
               >
-                <option value="">Todas as categorias</option>
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="dashboard-supplier" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Fornecedor
-              </Label>
-              <Select
-                id="dashboard-supplier"
-                value={supplierFilter}
-                onChange={(event) => setSupplierFilter(event.target.value)}
-                className="min-w-[200px]"
-              >
-                <option value="">Todos os fornecedores</option>
-                {suppliers.map((supplier) => (
-                  <option key={supplier} value={supplier}>
-                    {supplier}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="dashboard-product" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Produto
-              </Label>
-              <Select
-                id="dashboard-product"
-                value={productFilter}
-                onChange={(event) => setProductFilter(event.target.value)}
-                className="min-w-[200px]"
-              >
-                <option value="">Todos os produtos</option>
-                {productOptions.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.name} ({product.sku})
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="dashboard-range" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Periodo
-              </Label>
-              <Select
-                id="dashboard-range"
-                value={movementRange}
-                onChange={(event) => setMovementRange(event.target.value as MovementRange)}
-                className="min-w-[200px]"
-              >
-                {MOVEMENT_RANGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
+                Limpar filtros
+              </Button>
             </div>
           </div>
+          {activeTab === "stock" ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="space-y-1">
+                <Label
+                  htmlFor="dashboard-category"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Categoria
+                </Label>
+                <Select
+                  id="dashboard-category"
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="min-w-[200px]"
+                >
+                  <option value="">Todas as categorias</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="dashboard-supplier"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Fornecedor
+                </Label>
+                <Select
+                  id="dashboard-supplier"
+                  value={supplierFilter}
+                  onChange={(event) => setSupplierFilter(event.target.value)}
+                  className="min-w-[200px]"
+                >
+                  <option value="">Todos os fornecedores</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier} value={supplier}>
+                      {supplier}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="dashboard-product"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Produto
+                </Label>
+                <Select
+                  id="dashboard-product"
+                  value={productFilter}
+                  onChange={(event) => setProductFilter(event.target.value)}
+                  className="min-w-[200px]"
+                >
+                  <option value="">Todos os produtos</option>
+                  {productOptions.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name} ({product.sku})
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="dashboard-line"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Linha
+                </Label>
+                <Select
+                  id="dashboard-line"
+                  value={productLineFilter}
+                  onChange={(event) => setProductLineFilter(event.target.value as "all" | ProductLine)}
+                  className="min-w-[200px]"
+                >
+                  {PRODUCT_LINE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="dashboard-range"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Periodo
+                </Label>
+                <Select
+                  id="dashboard-range"
+                  value={movementRange}
+                  onChange={(event) => setMovementRange(event.target.value as MovementRange)}
+                  className="min-w-[200px]"
+                >
+                  {MOVEMENT_RANGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+          ) : null}
         </div>
       </header>
 
       {loading ? (
         <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando metricas...</div>
-      ) : (
+      ) : activeTab === "stock" ? (
         <>
           <section className="grid gap-4">
             {movementSeries.length ? (
@@ -884,6 +1219,117 @@ function DashboardContent() {
               </div>
             )}
           </section>
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <StatsCard label="Itens em estoque" value={totalItems.toLocaleString("pt-BR")} />
+            <StatsCard label="Valor em estoque" value={currency(totalValue)} />
+            <StatsCard label="Saidas hoje" value={`${todayStats.totalQty} itens`} description={currency(todayStats.totalVal)} />
+            <StatsCard label="Saidas na semana" value={`${weekStats.totalQty} itens`} description={currency(weekStats.totalVal)} />
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-[3fr,2fr]">
+            <StatsCard label="Saidas no mes" value={`${monthStats.totalQty} itens`} description={currency(monthStats.totalVal)} />
+            <StatsCard label="Saidas no ano" value={`${yearStats.totalQty} itens`} description={currency(yearStats.totalVal)} />
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {categoryDonutData.length ? (
+              <Donut data={categoryDonutData} title="Valor por categoria" />
+            ) : (
+              <div className="rounded-2xl bg-white p-6 shadow-sm">
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por categoria</h3>
+                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
+              </div>
+            )}
+            {supplierDonutData.length ? (
+              <Donut data={supplierDonutData} title="Valor por fornecedor" />
+            ) : (
+              <div className="rounded-2xl bg-white p-6 shadow-sm">
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por fornecedor</h3>
+                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
+              </div>
+            )}
+            <ProductsBarChart
+              className="md:col-span-2 xl:col-span-3"
+              data={topProductsData}
+              title="Produtos com mais saida"
+              valueFormatter={topProductsValueFormatter}
+              chartHeight="h-[26rem]"
+              xTickAngle={-35}
+              emptyMessage="Sem saidas no periodo selecionado."
+              headerActions={
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Select
+                    value={topProductsMetric}
+                    onChange={(event) => setTopProductsMetric(event.target.value as TopProductsMetric)}
+                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  >
+                    {TOP_PRODUCTS_METRIC_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    value={topProductsPeriod}
+                    onChange={(event) => setTopProductsPeriod(event.target.value as TopProductsPeriod)}
+                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  >
+                    {TOP_PRODUCTS_PERIOD_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              }
+            />
+          </section>
+          <section className="grid gap-4 xl:grid-cols-[3fr,2fr]">
+            <ProductsBarChart
+              className="xl:col-span-2"
+              data={idleProductsData}
+              title="Produtos mais parados"
+              valueFormatter={idleProductsValueFormatter}
+              chartHeight="h-[28rem]"
+              xTickAngle={-35}
+              emptyMessage="Nenhum produto elegivel para este filtro."
+              headerActions={
+                <Select
+                  value={idleProductsMetric}
+                  onChange={(event) => setIdleProductsMetric(event.target.value as IdleProductsMetric)}
+                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                >
+                  {IDLE_METRIC_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              }
+            />
+            <LineTimeseries
+              data={stockValueSeries}
+              title="Valor do estoque"
+              valueFormatter={currency}
+              emptyMessage="Sem movimentacoes no periodo selecionado."
+              headerActions={
+                <Select
+                  value={waterfallRange}
+                  onChange={(event) => setWaterfallRange(event.target.value as WaterfallRange)}
+                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                >
+                  {WATERFALL_RANGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              }
+            />
+          </section>
+        </>
+      ) : (
+        <>
           {userOptions.length ? (
             <section className="grid gap-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1110,59 +1556,18 @@ function DashboardContent() {
                 </div>
               ) : null}
             </section>
-          ) : null}
-
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <StatsCard label="Itens em estoque" value={totalItems.toLocaleString("pt-BR")} />
-            <StatsCard label="Valor em estoque" value={currency(totalValue)} />
-            <StatsCard label="Saidas hoje" value={`${todayStats.totalQty} itens`} description={currency(todayStats.totalVal)} />
-            <StatsCard label="Saidas na semana" value={`${weekStats.totalQty} itens`} description={currency(weekStats.totalVal)} />
-          </section>
-
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
-            <StatsCard label="Saidas no mes" value={`${monthStats.totalQty} itens`} description={currency(monthStats.totalVal)} />
-            <StatsCard label="Saidas no ano" value={`${yearStats.totalQty} itens`} description={currency(yearStats.totalVal)} />
-          </section>
-
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {categoryDonutData.length ? (
-              <Donut data={categoryDonutData} title="Valor por categoria" />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por categoria</h3>
-                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
-              </div>
-            )}
-            {supplierDonutData.length ? (
-              <Donut data={supplierDonutData} title="Valor por fornecedor" />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por fornecedor</h3>
-                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
-              </div>
-            )}
-            {productDonutData.length ? (
-              <Donut
-                data={productDonutData}
-                title="Produtos mais vendidos"
-                formatValue={productDonutValueFormatter}
-                headerActions={<div className="min-w-[150px]">{renderProductMetricSelector()}</div>}
-              />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <header className="mb-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Produtos mais vendidos</h3>
-                    <div className="min-w-[150px]">{renderProductMetricSelector()}</div>
-                  </div>
-                </header>
-                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
-              </div>
-            )}
-          </section>
-
-                  </>
+          ) : (
+            <div className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Nenhum usuario com movimentacoes para exibir.
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
+
+
+
+
+
