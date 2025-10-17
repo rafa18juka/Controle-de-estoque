@@ -10,7 +10,16 @@
 
 
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 
 
 
@@ -65,6 +74,46 @@ type ProductInsight = {
 
 
 };
+
+type ColumnKey =
+  | "select"
+  | "kits"
+  | "name"
+  | "sku"
+  | "unitPrice"
+  | "category"
+  | "supplier"
+  | "quantity"
+  | "estoqueMinimo"
+  | "totalValue";
+
+const COLUMN_MIN_WIDTHS: Record<ColumnKey, number> = {
+  select: 48,
+  kits: 56,
+  name: 220,
+  sku: 110,
+  unitPrice: 130,
+  category: 140,
+  supplier: 150,
+  quantity: 120,
+  estoqueMinimo: 130,
+  totalValue: 150
+};
+
+const INITIAL_COLUMN_WIDTHS: Record<ColumnKey, number> = {
+  select: 48,
+  kits: 56,
+  name: 280,
+  sku: 140,
+  unitPrice: 150,
+  category: 160,
+  supplier: 170,
+  quantity: 140,
+  estoqueMinimo: 160,
+  totalValue: 170
+};
+
+const NON_RESIZABLE_COLUMNS = new Set<ColumnKey>(["select", "kits"]);
 
 
 
@@ -365,6 +414,99 @@ export function EditableTable({
   const kitsEnabled = Boolean(enableKits);
 
   const totalColumns = kitsEnabled ? 10 : 9;
+
+  const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(() => ({ ...INITIAL_COLUMN_WIDTHS }));
+
+  const columnOrder = useMemo<ColumnKey[]>(() => {
+    const order: ColumnKey[] = ["select"];
+    if (kitsEnabled) {
+      order.push("kits");
+    }
+    order.push("name", "sku", "unitPrice", "category", "supplier", "quantity", "estoqueMinimo", "totalValue");
+    return order;
+  }, [kitsEnabled]);
+
+  const getColumnStyle = useCallback(
+    (key: ColumnKey): CSSProperties => ({
+      width: `${columnWidths[key]}px`,
+      minWidth: `${COLUMN_MIN_WIDTHS[key]}px`
+    }),
+    [columnWidths]
+  );
+
+  const headerButtonClass =
+    "flex items-center gap-1 text-slate-100 transition-colors hover:text-sky-200 focus:outline-none";
+  const headerButtonRightClass =
+    "flex w-full items-center justify-end gap-1 text-slate-100 transition-colors hover:text-sky-200 focus:outline-none";
+
+  const resizingColumnRef = useRef<ColumnKey | null>(null);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(0);
+  const originalUserSelectRef = useRef<string | null>(null);
+  const originalCursorRef = useRef<string | null>(null);
+
+  const handleResizeMove = useCallback((event: PointerEvent) => {
+    const columnKey = resizingColumnRef.current;
+    if (!columnKey) {
+      return;
+    }
+    const delta = event.clientX - resizeStartXRef.current;
+    const baseWidth = resizeStartWidthRef.current;
+    const nextWidth = Math.max(COLUMN_MIN_WIDTHS[columnKey], baseWidth + delta);
+    setColumnWidths((prev) => {
+      const previousWidth = prev[columnKey];
+      if (Math.abs(previousWidth - nextWidth) < 0.5) {
+        return prev;
+      }
+      return { ...prev, [columnKey]: nextWidth };
+    });
+  }, []);
+
+  const handleResizeEnd = useCallback(() => {
+    resizingColumnRef.current = null;
+    if (originalUserSelectRef.current !== null) {
+      document.body.style.userSelect = originalUserSelectRef.current;
+      originalUserSelectRef.current = null;
+    } else {
+      document.body.style.removeProperty("user-select");
+    }
+
+    if (originalCursorRef.current !== null) {
+      document.body.style.cursor = originalCursorRef.current;
+      originalCursorRef.current = null;
+    } else {
+      document.body.style.removeProperty("cursor");
+    }
+
+    document.removeEventListener("pointermove", handleResizeMove);
+    document.removeEventListener("pointerup", handleResizeEnd);
+  }, [handleResizeMove]);
+
+  const handleResizeStart = useCallback(
+    (key: ColumnKey, event: ReactPointerEvent<HTMLSpanElement>) => {
+      if (NON_RESIZABLE_COLUMNS.has(key)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      resizingColumnRef.current = key;
+      resizeStartXRef.current = event.clientX;
+      resizeStartWidthRef.current = columnWidths[key];
+      originalUserSelectRef.current = document.body.style.userSelect;
+      originalCursorRef.current = document.body.style.cursor;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+      document.addEventListener("pointermove", handleResizeMove);
+      document.addEventListener("pointerup", handleResizeEnd);
+    },
+    [columnWidths, handleResizeEnd, handleResizeMove]
+  );
+
+  useEffect(() => {
+    return () => {
+      handleResizeEnd();
+    };
+  }, [handleResizeEnd]);
 
   const expandedSet = useMemo(() => new Set(expandedProductIds), [expandedProductIds, kitsEnabled]);
 
@@ -1304,530 +1446,211 @@ export function EditableTable({
 
 
 
-        <table className="w-full min-w-[1000px] table-auto divide-y divide-slate-200">
+        <table className="w-full min-w-[1000px] table-fixed divide-y divide-slate-200">
 
 
 
           <colgroup>
-
-
-
-            <col className="w-[48px]" />
-
-
-
-            {kitsEnabled ? <col className="w-[44px]" /> : null}
-
-
-
-            <col className="min-w-[240px] md:min-w-[280px]" />
-
-
-
-            <col className="w-[120px]" />
-
-
-
-            <col className="w-[150px]" />
-
-
-
-            <col className="w-[140px]" />
-
-
-
-            <col className="w-[150px]" />
-
-
-
-            <col className="w-[150px]" />
-
-
-
-            <col className="w-[120px]" />
-
-
-
-            <col className="w-[150px]" />
-
-
-
+            {columnOrder.map((key) => (
+              <col key={key} style={getColumnStyle(key)} />
+            ))}
           </colgroup>
 
 
 
-          <thead className="sticky top-0 z-10 bg-white text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-
-
-
+          <thead className="sticky top-0 z-10 bg-slate-900 text-left text-xs font-semibold uppercase tracking-wide text-slate-100">
             <tr>
-
-
-
-              <th className="px-3 py-3">
-
-
-
+              <th className="py-3 pl-3 pr-3 text-slate-100" style={getColumnStyle("select")}>
                 <input
-
-
-
                   type="checkbox"
-
-
-
                   checked={allVisibleSelected}
-
-
-
                   onChange={(event) => handleToggleAllVisible(event.target.checked)}
-
-
-
                   aria-checked={someVisibleSelected && !allVisibleSelected ? "mixed" : allVisibleSelected}
-
-
-
                   title="Selecionar resultados visiveis"
-
-
-
                 />
-
-
-
               </th>
-
-
-
               {kitsEnabled ? (
-
-                <th className="px-2 py-3 text-slate-400">Kits</th>
-
+                <th className="py-3 pl-2 pr-4 text-center text-slate-200" style={getColumnStyle("kits")}>
+                  Kits
+                </th>
               ) : null}
-
-
-
               <th
-
-
-
-                className="px-3 py-3"
-
-
-
+                className="group relative py-3 pl-3 pr-6"
                 aria-sort={ariaSortFor("name")}
-
-
-
+                style={getColumnStyle("name")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("name")}
-
-
-
-                  className="flex items-center gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonClass}
                 >
-
-
-
                   Nome
-
-
-
                   {renderSortIcon("name")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("name", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3"
-
-
-
+                className="group relative py-3 pl-3 pr-6"
                 aria-sort={ariaSortFor("sku")}
-
-
-
+                style={getColumnStyle("sku")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("sku")}
-
-
-
-                  className="flex items-center gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonClass}
                 >
-
-
-
                   SKU
-
-
-
                   {renderSortIcon("sku")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("sku", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3 text-right"
-
-
-
+                className="group relative py-3 pl-3 pr-6 text-right"
                 aria-sort={ariaSortFor("unitPrice")}
-
-
-
+                style={getColumnStyle("unitPrice")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("unitPrice")}
-
-
-
-                  className="flex w-full items-center justify-end gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonRightClass}
                 >
-
-
-
-                  Preço unitário
-
-
-
+                  Preco unitario
                   {renderSortIcon("unitPrice")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("unitPrice", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3"
-
-
-
+                className="group relative py-3 pl-3 pr-6"
                 aria-sort={ariaSortFor("category")}
-
-
-
+                style={getColumnStyle("category")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("category")}
-
-
-
-                  className="flex items-center gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonClass}
                 >
-
-
-
                   Categoria
-
-
-
                   {renderSortIcon("category")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("category", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3"
-
-
-
+                className="group relative py-3 pl-3 pr-6"
                 aria-sort={ariaSortFor("supplier")}
-
-
-
+                style={getColumnStyle("supplier")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("supplier")}
-
-
-
-                  className="flex items-center gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonClass}
                 >
-
-
-
                   Fornecedor
-
-
-
                   {renderSortIcon("supplier")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("supplier", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3 text-right"
-
-
-
+                className="group relative py-3 pl-3 pr-6 text-right"
                 aria-sort={ariaSortFor("quantity")}
-
-
-
+                style={getColumnStyle("quantity")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("quantity")}
-
-
-
-                  className="flex w-full items-center justify-end gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonRightClass}
                 >
-
-
-
                   Quantidade
-
-
-
                   {renderSortIcon("quantity")}
-
-
-
                 </button>
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("quantity", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
               <th
-
-
-
-                className="px-3 py-3 text-right"
-
-
-
+                className="group relative py-3 pl-3 pr-6 text-right"
                 aria-sort={ariaSortFor("estoqueMinimo")}
-
-
-
+                style={getColumnStyle("estoqueMinimo")}
               >
-
-
-
                 <button
-
-
-
                   type="button"
-
-
-
                   onClick={() => handleSort("estoqueMinimo")}
-
-
-
-                  className="flex w-full items-center justify-end gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                  className={headerButtonRightClass}
                 >
-
-
-
                   Estoque minimo
-
-
-
                   {renderSortIcon("estoqueMinimo")}
-
-
-
                 </button>
-
-
-
-              </th>
-
-
-
-              <th
-
-
-
-                className="px-3 py-3 text-right"
-
-
-
-                aria-sort={ariaSortFor("totalValue")}
-
-
-
-              >
-
-
-
-                <button
-
-
-
-                  type="button"
-
-
-
-                  onClick={() => handleSort("totalValue")}
-
-
-
-                  className="flex w-full items-center justify-end gap-1 text-slate-600 transition-colors hover:text-blue-600 focus:outline-none"
-
-
-
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("estoqueMinimo", event)}
                 >
-
-
-
-                  Valor total
-
-
-
-                  {renderSortIcon("totalValue")}
-
-
-
-                </button>
-
-
-
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
               </th>
-
-
-
+              <th
+                className="group relative py-3 pl-3 pr-6 text-right"
+                aria-sort={ariaSortFor("totalValue")}
+                style={getColumnStyle("totalValue")}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSort("totalValue")}
+                  className={headerButtonRightClass}
+                >
+                  Valor total
+                  {renderSortIcon("totalValue")}
+                </button>
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
+                  onPointerDown={(event) => handleResizeStart("totalValue", event)}
+                >
+                  <span className="pointer-events-none h-8 w-[3px] rounded-full bg-white/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </span>
+              </th>
             </tr>
-
-
-
           </thead>
 
 
@@ -3589,6 +3412,15 @@ export function EditableTable({
 
 
 }
+
+
+
+
+
+
+
+
+
 
 
 
