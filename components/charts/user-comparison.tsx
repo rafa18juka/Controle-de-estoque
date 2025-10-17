@@ -20,18 +20,20 @@ interface UserComparisonDatum {
   user: string;
   quantity: number;
   totalValue?: number;
-  totalActions?: number;
+  secondaryLabel?: string;
+  secondaryValue?: number;
 }
 
 interface UserComparisonChartProps {
   data: UserComparisonDatum[];
   title?: string;
   className?: string;
+  quantityLabel?: string;
 }
 
 const COLORS = ["#7C3AED", "#06B6D4", "#F97316", "#0EA5E9", "#F973AB", "#FACC15"];
 
-export function UserComparisonChart({ data, title, className }: UserComparisonChartProps) {
+export function UserComparisonChart({ data, title, className, quantityLabel }: UserComparisonChartProps) {
   const chartData = useMemo(() => {
     return data.map((item, index) => ({
       ...item,
@@ -53,10 +55,12 @@ export function UserComparisonChart({ data, title, className }: UserComparisonCh
       <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{payload.user}</p>
         <p className="text-sm font-semibold text-slate-900">
-          {payload.quantity.toLocaleString("pt-BR")} itens
+          {payload.quantity.toLocaleString("pt-BR")} {quantityLabel ?? "itens"}
         </p>
-        {typeof payload.totalActions === "number" ? (
-          <p className="text-xs text-slate-500">{payload.totalActions.toLocaleString("pt-BR")} movimentacoes</p>
+        {typeof payload.secondaryValue === "number" && payload.secondaryLabel ? (
+          <p className="text-xs text-slate-500">
+            {payload.secondaryValue.toLocaleString("pt-BR")} {payload.secondaryLabel}
+          </p>
         ) : null}
         {typeof payload.totalValue === "number" ? (
           <p className="text-xs text-slate-500">{currency(payload.totalValue)}</p>
@@ -101,3 +105,4 @@ export function UserComparisonChart({ data, title, className }: UserComparisonCh
     </div>
   );
 }
+
