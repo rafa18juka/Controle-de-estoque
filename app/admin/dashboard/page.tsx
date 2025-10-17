@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
 import { ProtectedRoute } from "@/components/protected-route";
+import { motion } from "framer-motion";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { StatsCard } from "@/components/stats-card";
 import { ensureFirebase } from "@/lib/firebase-client";
 import { fetchMovementUsers, type MovementUserOption } from "@/lib/firestore";
-import type { Product, StockMovement } from "@/lib/types";
+import type { Product, StockMovement, TrackingCodeRecord } from "@/lib/types";
 import { currency, formatDay } from "@/lib/format";
 import type { ProductsBarDatum } from "@/components/charts/products-bar";
 
@@ -41,6 +42,7 @@ type IdleProductsMetric = "quantity" | "value";
 type TopProductsMetric = "value" | "quantity" | "sales";
 type TopProductsPeriod = "day" | "week" | "month";
 type WaterfallRange = "week" | "month";
+type UserMetric = "quantity" | "actions";
 
 interface UserActivitySummary {
   id: string;
@@ -240,6 +242,38 @@ const MOVEMENT_RANGE_OPTIONS: { value: MovementRange; label: string }[] = [
   { value: "month", label: "Por mes (12 meses)" },
   { value: "year", label: "Por ano (5 anos)" }
 ];
+
+const USER_CARD_STYLES: Array<{
+  gradient: string;
+  border: string;
+  metric: string;
+  pill: string;
+}> = [
+  {
+    gradient: "from-sky-500 via-cyan-500 to-emerald-500",
+    border: "border-cyan-200",
+    metric: "text-cyan-600",
+    pill: "bg-cyan-100 text-cyan-700"
+  },
+  {
+    gradient: "from-amber-500 via-orange-500 to-rose-500",
+    border: "border-amber-200",
+    metric: "text-amber-600",
+    pill: "bg-amber-100 text-amber-700"
+  },
+  {
+    gradient: "from-violet-500 via-purple-500 to-fuchsia-500",
+    border: "border-fuchsia-200",
+    metric: "text-purple-600",
+    pill: "bg-purple-100 text-purple-700"
+  },
+  {
+    gradient: "from-emerald-500 via-teal-500 to-lime-500",
+    border: "border-emerald-200",
+    metric: "text-emerald-600",
+    pill: "bg-emerald-100 text-emerald-700"
+  }
+];
 export default function DashboardPage() {
   return (
     <ProtectedRoute>
@@ -253,6 +287,7 @@ export default function DashboardPage() {
 function DashboardContent() {
   const [products, setProducts] = useState<Product[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [trackingCodes, setTrackingCodes] = useState<TrackingCodeRecord[]>([]);
   const [movementUsers, setMovementUsers] = useState<MovementUserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string>("");
@@ -264,10 +299,10 @@ function DashboardContent() {
   const [topProductsMetric, setTopProductsMetric] = useState<TopProductsMetric>("value");
   const [topProductsPeriod, setTopProductsPeriod] = useState<TopProductsPeriod>("week");
   const [waterfallRange, setWaterfallRange] = useState<WaterfallRange>("week");
-  const [userSearch, setUserSearch] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [userStartDate, setUserStartDate] = useState("");
   const [userEndDate, setUserEndDate] = useState("");
+  const [userMetric, setUserMetric] = useState<UserMetric>("quantity");
   const [activeTab, setActiveTab] = useState<DashboardTab>("stock");
   const autoSelectedUsersRef = useRef(false);
 
@@ -279,10 +314,17 @@ function DashboardContent() {
         const { firestore } = bundle;
         const productsRef = firestore.collection(bundle.db, "products");
         const movementsRef = firestore.collection(bundle.db, "stockMovements");
+        const trackingRef = firestore.collection(bundle.db, "trackingCodes");
 
-        const [productsSnapshot, movementsSnapshot, usersList] = await Promise.all([
+        const [productsSnapshot, movementsSnapshot, trackingSnapshot, usersList] = await Promise.all([
           firestore.getDocs(productsRef),
           firestore.getDocs(movementsRef),
+          firestore
+            .getDocs(trackingRef)
+            .catch((trackingError: unknown) => {
+              console.error("Falha ao carregar rastreios do dashboard", trackingError);
+              return { docs: [] } as any;
+            }),
           fetchMovementUsers().catch((userError) => {
             console.error("Falha ao carregar usuarios do dashboard", userError);
             return [] as MovementUserOption[];
@@ -305,6 +347,29 @@ function DashboardContent() {
           } as StockMovement;
         });
         setMovements(loadedMovements);
+
+        const trackingDocs = Array.isArray((trackingSnapshot as any)?.docs) ? (trackingSnapshot as any).docs : [];
+        const loadedTracking: TrackingCodeRecord[] = trackingDocs.map((doc: any) => {
+          const data = doc.data ? doc.data() : {};
+          const createdAtValue =
+            data.createdAt && typeof data.createdAt.toMillis === "function"
+              ? data.createdAt.toMillis()
+              : Number(data.createdAt ?? 0);
+          return {
+            id: doc.id,
+            code: typeof data.code === "string" ? data.code : "",
+            userId: typeof data.userId === "string" ? data.userId : "",
+            userName: typeof data.userName === "string" ? data.userName : "",
+            createdAt: createdAtValue,
+            productSku: typeof data.productSku === "string" && data.productSku.length ? data.productSku : undefined,
+            productName: typeof data.productName === "string" && data.productName.length ? data.productName : undefined,
+            stockMovementId:
+              typeof data.stockMovementId === "string" && data.stockMovementId.length
+                ? data.stockMovementId
+                : undefined
+          };
+        });
+        setTrackingCodes(loadedTracking);
         setMovementUsers(usersList);
       } catch (error) {
         console.error(error);
@@ -356,6 +421,26 @@ function DashboardContent() {
     }
     return movements.filter((movement) => baseProductMap.has(movement.productId));
   }, [movements, baseProductMap, categoryFilter, supplierFilter, productFilter]);
+
+  const userFilteredTrackings = useMemo(() => {
+    const start = userStartDate ? new Date(`${userStartDate}T00:00:00`).getTime() : null;
+    const end = userEndDate ? new Date(`${userEndDate}T23:59:59.999`).getTime() : null;
+
+    if (!start && !end) {
+      return trackingCodes;
+    }
+
+    return trackingCodes.filter((tracking) => {
+      const ts = Number(tracking.createdAt ?? 0);
+      if (start && ts < start) {
+        return false;
+      }
+      if (end && ts > end) {
+        return false;
+      }
+      return true;
+    });
+  }, [trackingCodes, userStartDate, userEndDate]);
 
   const movementsWithProducts = useMemo(
     () =>
@@ -539,12 +624,8 @@ function DashboardContent() {
   }, [movementsWithProducts, userDirectory]);
 
   const filteredUserOptions = useMemo(() => {
-    if (!userSearch.trim()) {
-      return userOptions;
-    }
-    const term = userSearch.trim().toLowerCase();
-    return userOptions.filter((user) => user.searchTokens.some((token) => token.includes(term)));
-  }, [userOptions, userSearch]);
+    return userOptions;
+  }, [userOptions]);
 
   const selectedUsers = useMemo(() => {
     const selectedSet = new Set(selectedUserIds);
@@ -576,8 +657,9 @@ function DashboardContent() {
 
     for (const user of selectedUsers) {
       const movementsForUser = userFilteredMovements.filter((movement) => movement.userId === user.id);
+      const trackingsForUser = userFilteredTrackings.filter((tracking) => tracking.userId === user.id);
 
-      if (!movementsForUser.length) {
+      if (!movementsForUser.length && !trackingsForUser.length) {
         summaries.push({
           id: user.id,
           name: user.name,
@@ -631,6 +713,21 @@ function DashboardContent() {
         }
       }
 
+      if (trackingsForUser.length) {
+        for (const tracking of trackingsForUser) {
+          const ts = Number(tracking.createdAt ?? 0);
+          if (!ts) {
+            continue;
+          }
+          if (!firstScan || ts < firstScan) {
+            firstScan = ts;
+          }
+          if (!lastScan || ts > lastScan) {
+            lastScan = ts;
+          }
+        }
+      }
+
       const categories = Array.from(categoryTotals.entries())
         .map(([name, quantity]) => ({ name, quantity }))
         .sort((a, b) => b.quantity - a.quantity);
@@ -642,7 +739,7 @@ function DashboardContent() {
       summaries.push({
         id: user.id,
         name: user.name,
-        totalActions: movementsForUser.length,
+        totalActions: trackingsForUser.length,
         totalQuantity,
         totalValue,
         categories,
@@ -653,21 +750,33 @@ function DashboardContent() {
     }
 
     return summaries;
-  }, [selectedUsers, userFilteredMovements]);
-  const comparisonData = useMemo(
-    () =>
-      userStats
-        .filter((summary) => summary.totalQuantity > 0)
-        .map((summary) => ({
+  }, [selectedUsers, userFilteredMovements, userFilteredTrackings]);
+  const comparisonData = useMemo(() => {
+    const secondaryLabel = userMetric === "quantity" ? "movimentacoes gerais" : "itens embalados";
+    return userStats
+      .filter((summary) => {
+        const primary = userMetric === "quantity" ? summary.totalQuantity : summary.totalActions;
+        return primary > 0;
+      })
+      .map((summary) => {
+        const primary = userMetric === "quantity" ? summary.totalQuantity : summary.totalActions;
+        const secondary = userMetric === "quantity" ? summary.totalActions : summary.totalQuantity;
+        return {
           user: summary.name,
-          quantity: summary.totalQuantity,
-          totalActions: summary.totalActions,
+          quantity: primary,
+          secondaryValue: secondary,
+          secondaryLabel,
           totalValue: summary.totalValue
-        })),
-    [userStats]
-  );
+        };
+      });
+  }, [userStats, userMetric]);
+  const comparisonTitle =
+    userMetric === "quantity"
+      ? "Comparativo de itens embalados por usuario"
+      : "Comparativo de movimentacoes por usuario";
+  const comparisonValueLabel = userMetric === "quantity" ? "itens embalados" : "movimentacoes";
 
-  const hasUserFilters = Boolean(userSearch.trim() || userStartDate || userEndDate || selectedUserIds.length);
+  const hasUserFilters = Boolean(userStartDate || userEndDate || selectedUserIds.length || userMetric !== "quantity");
 
   const formatUserDate = (timestamp: number | null) => {
     if (!timestamp) {
@@ -1040,9 +1149,9 @@ function DashboardContent() {
   const handleClearUserFilters = (preventAutoSelection = false) => {
     autoSelectedUsersRef.current = preventAutoSelection ? true : false;
     setSelectedUserIds([]);
-    setUserSearch("");
     setUserStartDate("");
     setUserEndDate("");
+    setUserMetric("quantity");
   };
   return (
     <div className="space-y-8">
@@ -1337,7 +1446,7 @@ function DashboardContent() {
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900">Atividade por usuario</h2>
                     <p className="text-sm text-slate-500">
-                      Pesquise usuarios para ver quantas saidas foram bipadas, categorias mais frequentes e produtos
+                      Selecione usuarios para ver quantas saidas foram bipadas, categorias mais frequentes e produtos
                       destacados no periodo escolhido.
                     </p>
                   </div>
@@ -1354,51 +1463,52 @@ function DashboardContent() {
                 </div>
                 <div className="mt-4 grid gap-4 lg:grid-cols-[2fr,1fr]">
                   <div className="space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1">
                         <Label
-                          htmlFor="dashboard-user-search"
+                          htmlFor="dashboard-user-start"
                           className="text-xs font-semibold uppercase tracking-wide text-slate-500"
                         >
-                          Buscar usuario
+                          Data inicial
                         </Label>
                         <Input
-                          id="dashboard-user-search"
-                          placeholder="Nome ou ID"
-                          value={userSearch}
-                          onChange={(event) => setUserSearch(event.target.value)}
+                          id="dashboard-user-start"
+                          type="date"
+                          value={userStartDate}
+                          onChange={(event) => setUserStartDate(event.target.value)}
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label
-                            htmlFor="dashboard-user-start"
-                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                          >
-                            Data inicial
-                          </Label>
-                          <Input
-                            id="dashboard-user-start"
-                            type="date"
-                            value={userStartDate}
-                            onChange={(event) => setUserStartDate(event.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label
-                            htmlFor="dashboard-user-end"
-                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                          >
-                            Data final
-                          </Label>
-                          <Input
-                            id="dashboard-user-end"
-                            type="date"
-                            value={userEndDate}
-                            min={userStartDate || undefined}
-                            onChange={(event) => setUserEndDate(event.target.value)}
-                          />
-                        </div>
+                      <div className="space-y-1">
+                        <Label
+                          htmlFor="dashboard-user-end"
+                          className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                        >
+                          Data final
+                        </Label>
+                        <Input
+                          id="dashboard-user-end"
+                          type="date"
+                          value={userEndDate}
+                          min={userStartDate || undefined}
+                          onChange={(event) => setUserEndDate(event.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label
+                          htmlFor="dashboard-user-metric"
+                          className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                        >
+                          Metricas exibidas
+                        </Label>
+                        <Select
+                          id="dashboard-user-metric"
+                          value={userMetric}
+                          onChange={(event) => setUserMetric(event.target.value as UserMetric)}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        >
+                          <option value="quantity">Embalados</option>
+                          <option value="actions">Movimentacoes</option>
+                        </Select>
                       </div>
                     </div>
                     <div className="space-y-2">
@@ -1428,7 +1538,7 @@ function DashboardContent() {
                   </div>
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Usuarios disponiveis</p>
-                    <div className="grid max-h-48 gap-2 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       {filteredUserOptions.map((user) => {
                         const active = selectedUserIds.includes(user.id);
                         return (
@@ -1436,7 +1546,7 @@ function DashboardContent() {
                             key={user.id}
                             type="button"
                             variant="outline"
-                            className={`justify-start text-left ${
+                            className={`w-full justify-start text-left ${
                               active ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-900" : ""
                             }`}
                             onClick={() => handleToggleUser(user.id)}
@@ -1455,102 +1565,102 @@ function DashboardContent() {
               </div>
 
               {comparisonData.length ? (
-                <UserComparisonChart data={comparisonData} title="Comparativo de saidas por usuario" />
+                <UserComparisonChart
+                  data={comparisonData}
+                  title={comparisonTitle}
+                  quantityLabel={comparisonValueLabel}
+                />
               ) : null}
               {selectedUsers.length ? (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {userStats.map((summary) => {
-                    const topCategories = summary.categories.slice(0, 3);
+                  {userStats.map((summary, index) => {
                     const topProducts = summary.topProducts.slice(0, 3);
-                    const hasActivity = summary.totalActions > 0;
+                    const hasActivity = summary.totalQuantity > 0 || summary.totalActions > 0;
+                    const accent = USER_CARD_STYLES[index % USER_CARD_STYLES.length];
+                    const primaryMetricLabel = userMetric === "quantity" ? "Embalados" : "Movimentacoes";
+                    const primaryMetricValue =
+                      userMetric === "quantity" ? summary.totalQuantity : summary.totalActions;
+                    const secondaryMetricText =
+                      userMetric === "quantity"
+                        ? `${summary.totalActions.toLocaleString("pt-BR")} movimentacoes gerais`
+                        : `${summary.totalQuantity.toLocaleString("pt-BR")} embalados`;
 
                     return (
-                      <div
+                      <motion.div
                         key={summary.id}
-                        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                        className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${accent.border}`}
+                        whileHover={{ y: -4, scale: 1.02 }}
+                        whileTap={{ scale: 0.97 }}
+                        transition={{ duration: 0.25, ease: "easeOut" }}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-wide text-slate-500">Usuario</p>
-                            <h3 className="text-lg font-semibold text-slate-900">{summary.name}</h3>
-                            <p className="text-xs text-slate-500">
-                              {summary.totalActions.toLocaleString("pt-BR")} movimentacoes registradas
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs uppercase tracking-wide text-slate-500">Quantidade</p>
-                            <p className="text-2xl font-bold text-slate-900">
-                              {summary.totalQuantity.toLocaleString("pt-BR")}
-                            </p>
+                        <div className={`bg-gradient-to-r px-5 py-4 text-white ${accent.gradient}`}>
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <h3 className="text-2xl font-semibold text-white">{summary.name}</h3>
+                              <p className="text-xs text-white/80">{secondaryMetricText}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs uppercase tracking-wide text-white/80">{primaryMetricLabel}</p>
+                              <p className="text-3xl font-bold text-white">
+                                {primaryMetricValue.toLocaleString("pt-BR")}
+                              </p>
+                            </div>
                           </div>
                         </div>
 
-                        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide text-slate-500">Valor movimentado</dt>
-                            <dd className="font-semibold text-slate-900">{currency(summary.totalValue)}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide text-slate-500">Ultima saida</dt>
-                            <dd className="font-semibold text-slate-900">{formatUserDate(summary.lastScan)}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide text-slate-500">Primeira saida</dt>
-                            <dd className="font-semibold text-slate-900">{formatUserDate(summary.firstScan)}</dd>
-                          </div>
-                        </dl>
-
-                        {hasActivity ? (
-                          <div className="mt-4 space-y-3">
-                            <div>
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Categorias principais
-                              </p>
-                              <ul className="mt-2 space-y-1 text-sm">
-                                {topCategories.map((category) => (
-                                  <li
-                                    key={`${summary.id}-${category.name}`}
-                                    className="flex items-center justify-between text-slate-600"
-                                  >
-                                    <span>{category.name}</span>
-                                    <span className="font-semibold text-slate-900">
-                                      {category.quantity.toLocaleString("pt-BR")} itens
-                                    </span>
-                                  </li>
-                                ))}
-                                {!topCategories.length ? (
-                                  <li className="text-sm text-slate-500">Sem categorias para este periodo.</li>
-                                ) : null}
-                              </ul>
+                        <div className="space-y-4 p-5">
+                          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
+                              <dt className="text-xs uppercase tracking-wide text-slate-500">Valor movimentado</dt>
+                              <dd className={`text-base font-semibold ${accent.metric}`}>
+                                {currency(summary.totalValue)}
+                              </dd>
                             </div>
-                            <div>
+                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
+                              <dt className="text-xs uppercase tracking-wide text-slate-500">Ultima saida</dt>
+                              <dd className="text-base font-semibold text-slate-700">
+                                {formatUserDate(summary.lastScan)}
+                              </dd>
+                            </div>
+                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
+                              <dt className="text-xs uppercase tracking-wide text-slate-500">Primeira saida</dt>
+                              <dd className="text-base font-semibold text-slate-700">
+                                {formatUserDate(summary.firstScan)}
+                              </dd>
+                            </div>
+                          </dl>
+
+                          {hasActivity ? (
+                            <div className="rounded-2xl bg-slate-50 p-4 shadow-inner">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Produtos mais bipados
                               </p>
-                              <ul className="mt-2 space-y-1 text-sm">
+                              <ul className="mt-3 space-y-2 text-sm">
                                 {topProducts.map((product) => (
                                   <li
                                     key={`${summary.id}-${product.id}`}
-                                    className="flex items-center justify-between text-slate-600"
+                                    className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 shadow-sm"
                                   >
-                                    <span className="truncate pr-2">{product.name}</span>
-                                    <span className="font-semibold text-slate-900">
+                                    <span className="truncate pr-2 font-medium text-slate-700">{product.name}</span>
+                                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${accent.pill}`}>
                                       {product.quantity.toLocaleString("pt-BR")} itens
                                     </span>
                                   </li>
                                 ))}
                                 {!topProducts.length ? (
-                                  <li className="text-sm text-slate-500">Sem produtos destacados no periodo.</li>
+                                  <li className="rounded-xl bg-white px-3 py-2 text-sm text-slate-500 shadow-sm">
+                                    Sem produtos destacados no periodo.
+                                  </li>
                                 ) : null}
                               </ul>
                             </div>
-                          </div>
-                        ) : (
-                          <p className="mt-4 text-sm text-slate-500">
-                            Sem movimentacoes para este usuario no periodo selecionado.
-                          </p>
-                        )}
-                      </div>
+                          ) : (
+                            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 shadow-inner">
+                              Sem movimentacoes para este usuario no periodo selecionado.
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
                     );
                   })}
                 </div>
