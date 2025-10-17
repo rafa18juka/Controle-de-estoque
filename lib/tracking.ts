@@ -4,6 +4,7 @@ const MAGAZINE_LUIZA_PATTERN = /^\d{9}-\d{2}$/;
  * Normaliza e identifica codigos de rastreio suportados.
  * - Mercado Livre: qualquer payload que comece com `{` (ex.: `{id":"..."` ou variantes).
  * - Shopee: qualquer valor que comece com `BR` (case insensitive).
+ * - Shein: qualquer valor que comece com `GC` (case insensitive).
  * - Magazine Luiza: `#########-##`.
  */
 export function parseTrackingCode(rawValue: string | null | undefined): string | null {
@@ -25,7 +26,7 @@ export function parseTrackingCode(rawValue: string | null | undefined): string |
   }
 
   const upper = trimmed.toUpperCase();
-  if (upper.startsWith("BR")) {
+  if (upper.startsWith("BR") || upper.startsWith("GC")) {
     return upper;
   }
 
