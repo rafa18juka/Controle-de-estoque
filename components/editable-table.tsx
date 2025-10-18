@@ -1655,7 +1655,7 @@ export function EditableTable({
 
 
 
-          <tbody className="divide-y divide-slate-100 bg-white text-sm">
+        <tbody className="divide-y divide-slate-100 bg-white text-sm dark:divide-slate-800 dark:bg-slate-900">
 
 
 

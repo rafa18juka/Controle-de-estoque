@@ -64,7 +64,7 @@ export function Donut({ data, title, className, formatValue, headerActions }: Do
     const { name, value } = typed.payload[0].payload;
 
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md dark:border-slate-700 dark:bg-slate-900">
         <p className="text-xs text-slate-500">{name}</p>
         <p className="text-sm font-semibold text-slate-900">{formatValueFn(value)}</p>
       </div>
@@ -82,7 +82,7 @@ export function Donut({ data, title, className, formatValue, headerActions }: Do
         y={viewBox.cy}
         textAnchor="middle"
         dominantBaseline="middle"
-        className="fill-slate-900 text-sm font-semibold"
+        className="fill-slate-900 text-sm font-semibold dark:fill-slate-100"
       >
         {formatValueFn(total)}
       </text>
@@ -90,7 +90,7 @@ export function Donut({ data, title, className, formatValue, headerActions }: Do
   };
 
   return (
-    <div className={cn("rounded-2xl bg-white p-6 shadow-sm", className)}>
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900", className)}>
       <header className="mb-4">
         <div className={cn("flex items-start justify-between gap-3", headerActions && "flex-col sm:flex-row sm:items-center sm:justify-between")}>
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>

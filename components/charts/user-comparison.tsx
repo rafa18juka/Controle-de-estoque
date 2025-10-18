@@ -52,7 +52,7 @@ export function UserComparisonChart({ data, title, className, quantityLabel }: U
 
     const payload = typed.payload[0].payload;
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md dark:border-slate-700 dark:bg-slate-900">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{payload.user}</p>
         <p className="text-sm font-semibold text-slate-900">
           {payload.quantity.toLocaleString("pt-BR")} {quantityLabel ?? "itens"}
@@ -70,7 +70,7 @@ export function UserComparisonChart({ data, title, className, quantityLabel }: U
   };
 
   return (
-    <div className={cn("rounded-2xl bg-white p-6 shadow-sm", className)}>
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900", className)}>
       {title ? (
         <header className="flex items-center justify-between">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: PropsWithChildren) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
-      <body className="bg-slate-50 font-sans text-slate-900 antialiased">
+      <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased transition-colors duration-300 dark:bg-slate-950 dark:text-slate-100">
         <Providers>
           <Navbar />
           <main className="container mx-auto w-full max-w-6xl px-4 pb-16 pt-24">

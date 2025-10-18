@@ -992,7 +992,7 @@ function InventoryContent() {
 
 
 
-        toast.error("Nao foi possivel carregar o estoque");
+        toast.error("Não foi possível carregar o estoque");
 
 
 
@@ -1500,7 +1500,7 @@ function InventoryContent() {
 
 
 
-      toast.success("Produtos excluAdos");
+      toast.success("Produtos excluídos");
 
 
 
@@ -1682,7 +1682,7 @@ function InventoryContent() {
 
       console.error("Falha ao salvar kit", error);
 
-      toast.error("Nao foi possivel salvar o kit.");
+      toast.error("Não foi possível salvar o kit.");
 
     }
 
@@ -1726,7 +1726,7 @@ function InventoryContent() {
 
       console.error("Falha ao remover kit", error);
 
-      toast.error("Nao foi possivel remover o kit.");
+      toast.error("Não foi possível remover o kit.");
 
     }
 
@@ -2224,7 +2224,7 @@ function InventoryContent() {
 
           if (seen.has(lower)) {
 
-            toast.error("Nao utilize o mesmo SKU em dois kits do mesmo produto.");
+            toast.error("Não utilize o mesmo SKU em dois kits do mesmo produto.");
 
             return;
 
@@ -2790,7 +2790,7 @@ function InventoryContent() {
 
 
 
-      toast.success("ImportaAAo concluAda");
+      toast.success("Importação concluída");
 
 
 
@@ -2866,7 +2866,7 @@ function InventoryContent() {
 
 
 
-          supplier: "ImpArio das Espumas"
+          supplier: "Império das Espumas"
 
 
 
@@ -2934,7 +2934,7 @@ function InventoryContent() {
 
 
 
-          category: "EletrAnicos",
+          category: "Eletrônicos",
 
 
 
@@ -3114,7 +3114,7 @@ function InventoryContent() {
 
 
 
-        <h1 className="text-3xl font-bold text-slate-900">GestAo de Estoque</h1>
+        <h1 className="text-3xl font-bold text-slate-900">Gestão de Estoque</h1>
 
 
 
@@ -3122,7 +3122,7 @@ function InventoryContent() {
 
 
 
-          Cadastre novos produtos, atualize informaAAes em linha e gere etiquetas prontas para impressAo Zebra.
+          Cadastre novos produtos, atualize informações em linha e gere etiquetas prontas para impressão Zebra.
 
 
 
@@ -3146,7 +3146,7 @@ function InventoryContent() {
 
 
 
-        <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando produtosa</div>
+        <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando produtos</div>
 
 
 
@@ -3876,7 +3876,7 @@ function InventoryContent() {
 
 
 
-            <DialogDescription>Cadastre ou remova categorias dispon?veis para os produtos.</DialogDescription>
+            <DialogDescription>Cadastre ou remova categorias disponíveis para os produtos.</DialogDescription>
 
 
 
@@ -4160,7 +4160,7 @@ function InventoryContent() {
 
 
 
-                    placeholder="Ex.: Imp?rio das Espumas"
+                    placeholder="Ex.: Império das Espumas"
 
 
 

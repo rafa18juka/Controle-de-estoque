@@ -26,6 +26,9 @@ export interface ProductsBarChartProps {
 
 const defaultFormatter = (value: number) => value.toLocaleString("pt-BR");
 
+type BarTooltipPayload = { payload: ProductsBarDatum & { value: number } };
+type BarTooltipProps = TooltipProps<number, string> & { payload?: BarTooltipPayload[] };
+
 export function ProductsBarChart({
   data,
   title,
@@ -50,7 +53,7 @@ export function ProductsBarChart({
   );
   const hasData = prepared.length > 0 && prepared.some((item) => item.value !== 0);
   const heightClass = chartHeight ?? "h-72";
-  const baseTickStyle = { fill: "#475569", fontSize: 12 };
+  const baseTickStyle = { fill: "#64748b", fontSize: 12 };
   const xTickStyle =
     layout === "horizontal"
       ? baseTickStyle
@@ -59,93 +62,120 @@ export function ProductsBarChart({
         : baseTickStyle;
   const xTickMargin = layout === "horizontal" ? 8 : xTickAngle !== undefined ? 20 : 8;
 
-  const renderTooltip = (props: TooltipProps<number, string>) => {
-    const typed = props as TooltipProps<number, string> & {
-      payload?: Array<{ payload: ProductsBarDatum & { value: number } }>;
-    };
-
-    if (!typed.active || !typed.payload?.length) {
+  const renderTooltip = (props: BarTooltipProps) => {
+    const payload = props.payload;
+    if (!props.active || !payload?.length) {
       return null;
     }
 
-    const { name, value, helper } = typed.payload[0].payload;
+    const datum = payload[0].payload;
 
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
-        <p className="text-xs text-slate-500">{name}</p>
-        <p className="text-sm font-semibold text-slate-900">{valueFormatter(value)}</p>
-        {helper ? <p className="text-xs text-slate-500">{helper}</p> : null}
+      <div className="min-w-[200px] rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{datum.name}</p>
+        <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-white">
+          {valueFormatter(datum.value)}
+        </p>
+        {datum.helper ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400">{datum.helper}</p>
+        ) : null}
       </div>
     );
   };
 
   return (
-    <div className={cn("rounded-2xl bg-white p-6 shadow-sm", className)}>
-      <header className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
-        {headerActions}
-      </header>
-      <div className={cn(heightClass, "w-full")}>
-        {hasData ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={prepared}
-              layout={layout === "horizontal" ? "vertical" : "horizontal"}
-              margin={{ top: 8, right: 16, bottom: 8, left: 16 }}
-            >
-              <defs>
-                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0EA5E9" stopOpacity={0.95} />
-                  <stop offset="100%" stopColor="#6366F1" stopOpacity={0.85} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#E2E8F0" strokeDasharray="4 4" horizontal={layout !== "horizontal"} vertical={false} />
-              {layout === "horizontal" ? (
-                <>
-                  <XAxis
-                    type="number"
-                    tickFormatter={valueFormatter}
-                    tick={{ fill: "#475569", fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={140}
-                    tick={{ fill: "#475569", fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                </>
-              ) : (
-                <>
-                  <XAxis
-                    dataKey="displayLabel"
-                    interval={xTickAngle !== undefined ? 0 : "preserveStart"}
-                    minTickGap={xTickAngle !== undefined ? 0 : 24}
-                    tick={xTickStyle}
-                    axisLine={false}
-                    tickLine={false}
-                    height={xTickAngle !== undefined ? 90 : undefined}
-                    tickMargin={xTickMargin}
-                  />
-                  <YAxis
-                    tickFormatter={valueFormatter}
-                    tick={baseTickStyle}
-                    axisLine={false}
-                    tickLine={false}
-                    width={80}
-                  />
-                </>
-              )}
-              <Tooltip cursor={{ fill: "rgba(14, 165, 233, 0.12)" }} content={renderTooltip} />
-              <Bar dataKey="value" radius={layout === "horizontal" ? [0, 6, 6, 0] : [6, 6, 0, 0]} fill={`url(#${gradientId})`} />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="flex h-full items-center justify-center px-4 text-sm text-slate-500">{emptyMessage}</div>
-        )}
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition dark:border-purple-500/20 dark:bg-slate-900/50",
+        className
+      )}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-500/5 via-indigo-500/10 to-cyan-500/10 dark:from-purple-500/20 dark:via-indigo-600/10 dark:to-cyan-500/20" />
+      <div className="pointer-events-none absolute -top-32 -left-32 h-72 w-72 rounded-full bg-purple-500/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-32 h-80 w-80 rounded-full bg-cyan-500/10 blur-3xl" />
+
+      <div className="relative z-10 space-y-6">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="text-base font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">{title}</h3>
+          {headerActions ? <div className="flex flex-wrap gap-2">{headerActions}</div> : null}
+        </header>
+
+        <div className={cn(heightClass, "w-full")}>
+          {hasData ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={prepared}
+                layout={layout === "horizontal" ? "vertical" : "horizontal"}
+                margin={{ top: 16, right: 12, bottom: 8, left: 16 }}
+              >
+                <defs>
+                  <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.85} />
+                    <stop offset="50%" stopColor="#3b82f6" stopOpacity={0.85} />
+                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.35} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  stroke="#cbd5f5"
+                  strokeDasharray="4 8"
+                  horizontal={layout !== "horizontal"}
+                  vertical={false}
+                  opacity={0.25}
+                />
+                {layout === "horizontal" ? (
+                  <>
+                    <XAxis
+                      type="number"
+                      tickFormatter={valueFormatter}
+                      tick={{ fill: "#64748b", fontSize: 12 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={160}
+                      tick={{ fill: "#64748b", fontSize: 12 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <XAxis
+                      dataKey="displayLabel"
+                      interval={xTickAngle !== undefined ? 0 : "preserveStart"}
+                      minTickGap={xTickAngle !== undefined ? 0 : 24}
+                      tick={xTickStyle}
+                      axisLine={false}
+                      tickLine={false}
+                      height={xTickAngle !== undefined ? 90 : undefined}
+                      tickMargin={xTickMargin}
+                    />
+                    <YAxis
+                      tickFormatter={valueFormatter}
+                      tick={{ fill: "#64748b", fontSize: 12 }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={90}
+                    />
+                  </>
+                )}
+                <Tooltip cursor={{ fill: "rgba(139, 92, 246, 0.12)" }} content={renderTooltip} />
+                <Bar
+                  dataKey="value"
+                  radius={layout === "horizontal" ? [0, 12, 12, 0] : [12, 12, 0, 0]}
+                  fill={`url(#${gradientId})`}
+                  maxBarSize={layout === "horizontal" ? undefined : 42}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-300/60 px-4 text-sm text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
+              {emptyMessage}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

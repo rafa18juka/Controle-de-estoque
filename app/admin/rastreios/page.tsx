@@ -174,7 +174,7 @@ function TrackingContent() {
 
   return (
     <div className="space-y-8">
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-card">
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900">
         <h2 className="text-xl font-semibold text-slate-900">Rastreios registrados</h2>
         <p className="text-sm text-slate-500">
           Filtre por codigo, operador ou intervalo de datas para localizar comprovantes de rastreamento.
@@ -233,7 +233,7 @@ function TrackingContent() {
         </form>
       </div>
 
-      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
+      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-4 py-3">
           <h3 className="text-lg font-semibold text-slate-900">Resultados</h3>
         </div>
@@ -242,7 +242,7 @@ function TrackingContent() {
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                 <tr>
                   <th className="px-4 py-3 text-left">Data</th>
                   <th className="px-4 py-3 text-left">Codigo</th>

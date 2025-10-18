@@ -8,15 +8,18 @@
   --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.dark {
+  color-scheme: dark;
+}
+
 html,
 body {
   min-height: 100%;
-  background-color: #f8fafc;
 }
 
 body {
   font-family: var(--font-sans, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  color: #0f172a;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 main {
@@ -24,19 +27,72 @@ main {
 }
 
 .table-input {
-  @apply w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200;
+  @apply w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-400 dark:focus:border-slate-300 dark:focus:ring-slate-700;
 }
 
 .card {
-  @apply rounded-2xl border border-slate-200 bg-white p-6 shadow-sm;
+  @apply rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900;
 }
 
 @layer base {
   * {
-    @apply border-slate-200;
+    @apply border-slate-200 dark:border-slate-800;
   }
   body {
-    @apply bg-slate-50 text-slate-900;
+    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply text-slate-900 dark:text-slate-100;
+  }
+}
+
+@layer utilities {
+  .dark .text-slate-600 {
+    color: rgb(203 213 225 / 1);
+  }
+  .dark .text-slate-700 {
+    color: rgb(226 232 240 / 1);
+  }
+  .dark .text-slate-800 {
+    color: rgb(241 245 249 / 1);
+  }
+  .dark .text-slate-500 {
+    color: rgb(148 163 184 / 1);
+  }
+  .dark .text-slate-400 {
+    color: rgb(156 163 175 / 1);
+  }
+  .dark .bg-slate-100 {
+    background-color: rgb(30 41 59 / 0.6);
+  }
+  .dark .bg-slate-100\/80 {
+    background-color: rgb(30 41 59 / 0.48);
+  }
+  .dark .bg-slate-100\/50 {
+    background-color: rgb(30 41 59 / 0.3);
+  }
+  .dark [class*="bg-slate-50/"] {
+    background-color: rgb(2 6 23 / var(--tw-bg-opacity, 1));
+  }
+  .dark .bg-slate-50 {
+    background-color: rgb(2 6 23 / 1);
+  }
+  .dark .bg-white {
+    background-color: rgb(15 23 42 / var(--tw-bg-opacity, 1));
+  }
+  .dark .border-slate-100 {
+    border-color: rgb(51 65 85 / 1);
+  }
+  .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgb(51 65 85 / 1);
+  }
+  .dark .shadow-card {
+    box-shadow: 0 20px 45px -20px rgba(2, 6, 23, 0.45);
   }
 }
 

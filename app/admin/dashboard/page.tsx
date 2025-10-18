@@ -16,13 +16,15 @@ import {
   subYears
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 
 import dynamic from "next/dynamic";
 
 import { ProtectedRoute } from "@/components/protected-route";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { Sparkles } from "lucide-react";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +36,10 @@ import { fetchMovementUsers, type MovementUserOption } from "@/lib/firestore";
 import type { Product, StockMovement, TrackingCodeRecord } from "@/lib/types";
 import { currency, formatDay } from "@/lib/format";
 import type { ProductsBarDatum } from "@/components/charts/products-bar";
+import type { ComparisonPoint, ComparisonSeriesKey } from "@/components/charts/comparison-area";
+import type { DailyColumnPoint } from "@/components/charts/daily-columns";
+import type { CosmicDonutDatum } from "@/components/charts/cosmic-donut-panel";
 
-type MovementRange = "day" | "week" | "month" | "year";
 type DashboardTab = "stock" | "users";
 type ProductLine = "A" | "B" | "C";
 type IdleProductsMetric = "quantity" | "value";
@@ -69,6 +73,107 @@ interface ProductSalesAggregate {
   totalValue: number;
   totalQuantity: number;
   saleCount: number;
+}
+
+interface ProductGroupDetail {
+  value: CosmicDonutDatum[];
+  quantity: CosmicDonutDatum[];
+}
+
+function buildProductGroupDetails(
+  products: Product[],
+  aggregates: ProductSalesAggregate[],
+  keySelector: (product: Product) => string,
+  limit = 8
+): Map<string, ProductGroupDetail> {
+  const aggregateByProductId = new Map<string, ProductSalesAggregate>();
+  for (const aggregate of aggregates) {
+    const id = aggregate.productId ?? aggregate.key;
+    if (id) {
+      aggregateByProductId.set(id, aggregate);
+    }
+  }
+
+  const details = new Map<string, ProductGroupDetail>();
+
+  products.forEach((product) => {
+    const groupKey = keySelector(product);
+    const aggregate = product.id ? aggregateByProductId.get(product.id) : undefined;
+    const fallbackQuantity = Number(product.quantity ?? 0);
+    const fallbackValue = Number(product.totalValue ?? fallbackQuantity * Number(product.unitPrice ?? 0));
+    const totalValue = Number(aggregate?.totalValue ?? fallbackValue);
+    const totalQuantity = Number(aggregate?.totalQuantity ?? fallbackQuantity);
+
+    if (totalValue <= 0 && totalQuantity <= 0) {
+      return;
+    }
+
+    const productLabel = product.name?.trim() || product.sku || "Produto";
+    const helperForValue = totalQuantity > 0 ? formatUnits(totalQuantity) : undefined;
+    const helperForQuantity = totalValue > 0 ? currency(totalValue) : undefined;
+    const current = details.get(groupKey) ?? { value: [], quantity: [] };
+
+    if (totalValue > 0) {
+      current.value.push({
+        name: productLabel,
+        value: totalValue,
+        helper: helperForValue
+      });
+    }
+
+    if (totalQuantity > 0) {
+      current.quantity.push({
+        name: productLabel,
+        value: totalQuantity,
+        helper: helperForQuantity
+      });
+    }
+
+    details.set(groupKey, current);
+  });
+
+  const decorate = (
+    items: CosmicDonutDatum[],
+    helperBuilder?: (total: number, count: number) => string | undefined
+  ) => {
+    if (!items.length) {
+      return [];
+    }
+
+    const sorted = [...items].sort((a, b) => b.value - a.value);
+    if (sorted.length > limit) {
+      const top = sorted.slice(0, limit - 1);
+      const others = sorted.slice(limit - 1);
+      const othersValue = others.reduce((accumulator, item) => accumulator + item.value, 0);
+      if (othersValue > 0) {
+        top.push({
+          name: `Outros (+${others.length})`,
+          value: othersValue,
+          helper: helperBuilder?.(othersValue, others.length)
+        });
+      }
+      return top.map((item, index) => ({
+        ...item,
+        color: COSMIC_DONUT_COLORS[index % COSMIC_DONUT_COLORS.length]
+      }));
+    }
+
+    return sorted.map((item, index) => ({
+      ...item,
+      color: COSMIC_DONUT_COLORS[index % COSMIC_DONUT_COLORS.length]
+    }));
+  };
+
+  for (const [groupKey, detail] of details.entries()) {
+    const valueDecorated = decorate(detail.value, (_, count) => `${count} produtos`);
+    const quantityDecorated = decorate(detail.quantity, (total) => formatUnits(total));
+    details.set(groupKey, {
+      value: valueDecorated,
+      quantity: quantityDecorated
+    });
+  }
+
+  return details;
 }
 
 function normalizeNameCandidate(value: string) {
@@ -186,11 +291,18 @@ function aggregateProductSales(movements: MovementWithProduct[]): ProductSalesAg
   return Array.from(totals.values());
 }
 
-const BarTimeseries = dynamic(
-  () => import("@/components/charts/bar-timeseries").then((mod) => mod.BarTimeseries),
+const ComparisonAreaChart = dynamic(
+  () => import("@/components/charts/comparison-area").then((mod) => mod.ComparisonAreaChart),
   { ssr: false }
 );
-const Donut = dynamic(() => import("@/components/charts/donut").then((mod) => mod.Donut), { ssr: false });
+const DailyColumnsChart = dynamic(
+  () => import("@/components/charts/daily-columns").then((mod) => mod.DailyColumnsChart),
+  { ssr: false }
+);
+const CosmicDonutPanel = dynamic(
+  () => import("@/components/charts/cosmic-donut-panel").then((mod) => mod.CosmicDonutPanel),
+  { ssr: false }
+);
 const UserComparisonChart = dynamic(
   () => import("@/components/charts/user-comparison").then((mod) => mod.UserComparisonChart),
   { ssr: false }
@@ -206,6 +318,22 @@ const LineTimeseries = dynamic(
 
 // Keep supplier donut legend compact when many fornecedores.
 const SUPPLIER_DONUT_MAX_SLICES = 8;
+const COSMIC_DONUT_COLORS = [
+  "#22d3ee",
+  "#a855f7",
+  "#38bdf8",
+  "#6366f1",
+  "#f59e0b",
+  "#f97316",
+  "#ec4899",
+  "#10b981",
+  "#f43f5e",
+  "#14b8a6"
+];
+
+function formatUnits(value: number) {
+  return `${value.toLocaleString("pt-BR")} un`;
+}
 
 const PRODUCT_LINE_OPTIONS: Array<{ value: "all" | ProductLine; label: string }> = [
   { value: "all", label: "Todas as linhas" },
@@ -218,6 +346,27 @@ const IDLE_METRIC_OPTIONS: Array<{ value: IdleProductsMetric; label: string }> =
   { value: "quantity", label: "Por unidades" },
   { value: "value", label: "Por valor" }
 ];
+
+const DEFAULT_COMPARISON_KEYS: ComparisonSeriesKey[] = ["week", "month", "year"];
+const COMPARISON_OPTIONS: Array<{ key: ComparisonSeriesKey; label: string }> = [
+  { key: "week", label: "Semanal" },
+  { key: "month", label: "Mensal" },
+  { key: "year", label: "Anual" }
+];
+const COMPARISON_KEY_ORDER = COMPARISON_OPTIONS.map((option) => option.key);
+const COMPARISON_WINDOW_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 6, label: "6 pontos" },
+  { value: 9, label: "9 pontos" },
+  { value: 12, label: "12 pontos" }
+];
+const DEFAULT_COMPARISON_WINDOW = 12;
+const DAILY_WINDOW_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 7, label: "7 dias" },
+  { value: 14, label: "14 dias" },
+  { value: 30, label: "30 dias" }
+];
+const DEFAULT_DAILY_WINDOW = 30;
+const MAX_DAILY_POINTS = 60;
 
 const TOP_PRODUCTS_METRIC_OPTIONS: Array<{ value: TopProductsMetric; label: string }> = [
   { value: "value", label: "Por valor" },
@@ -236,42 +385,47 @@ const WATERFALL_RANGE_OPTIONS: Array<{ value: WaterfallRange; label: string }> =
   { value: "month", label: "Ultimo mes" }
 ];
 
-const MOVEMENT_RANGE_OPTIONS: { value: MovementRange; label: string }[] = [
-  { value: "day", label: "Por dia (30 dias)" },
-  { value: "week", label: "Por semana (12 semanas)" },
-  { value: "month", label: "Por mes (12 meses)" },
-  { value: "year", label: "Por ano (5 anos)" }
-];
-
-const USER_CARD_STYLES: Array<{
+type UserCardStyle = {
   gradient: string;
   border: string;
   metric: string;
   pill: string;
-}> = [
+  conicGradient: string;
+  glowGradient: string;
+};
+
+const USER_CARD_STYLES: UserCardStyle[] = [
   {
     gradient: "from-sky-500 via-cyan-500 to-emerald-500",
     border: "border-cyan-200",
     metric: "text-cyan-600",
-    pill: "bg-cyan-100 text-cyan-700"
+    pill: "bg-cyan-100 text-cyan-700",
+    conicGradient: "conic-gradient(from 0deg at 50% 50%, #0ea5e9, #06b6d4, #34d399, #0ea5e9)",
+    glowGradient: "linear-gradient(135deg, rgba(14, 165, 233, 0.35), rgba(20, 184, 166, 0.35))"
   },
   {
     gradient: "from-amber-500 via-orange-500 to-rose-500",
     border: "border-amber-200",
     metric: "text-amber-600",
-    pill: "bg-amber-100 text-amber-700"
+    pill: "bg-amber-100 text-amber-700",
+    conicGradient: "conic-gradient(from 0deg at 50% 50%, #f97316, #f59e0b, #f43f5e, #f97316)",
+    glowGradient: "linear-gradient(135deg, rgba(251, 191, 36, 0.35), rgba(244, 63, 94, 0.35))"
   },
   {
     gradient: "from-violet-500 via-purple-500 to-fuchsia-500",
     border: "border-fuchsia-200",
     metric: "text-purple-600",
-    pill: "bg-purple-100 text-purple-700"
+    pill: "bg-purple-100 text-purple-700",
+    conicGradient: "conic-gradient(from 0deg at 50% 50%, #a855f7, #8b5cf6, #ec4899, #a855f7)",
+    glowGradient: "linear-gradient(135deg, rgba(168, 85, 247, 0.38), rgba(236, 72, 153, 0.35))"
   },
   {
     gradient: "from-emerald-500 via-teal-500 to-lime-500",
     border: "border-emerald-200",
     metric: "text-emerald-600",
-    pill: "bg-emerald-100 text-emerald-700"
+    pill: "bg-emerald-100 text-emerald-700",
+    conicGradient: "conic-gradient(from 0deg at 50% 50%, #34d399, #10b981, #84cc16, #34d399)",
+    glowGradient: "linear-gradient(135deg, rgba(52, 211, 153, 0.3), rgba(132, 204, 22, 0.35))"
   }
 ];
 export default function DashboardPage() {
@@ -293,12 +447,16 @@ function DashboardContent() {
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [supplierFilter, setSupplierFilter] = useState<string>("");
   const [productFilter, setProductFilter] = useState<string>("");
-  const [movementRange, setMovementRange] = useState<MovementRange>("day");
+  const [activeComparisonKeys, setActiveComparisonKeys] = useState<ComparisonSeriesKey[]>(() => [...DEFAULT_COMPARISON_KEYS]);
   const [productLineFilter, setProductLineFilter] = useState<"all" | ProductLine>("all");
   const [idleProductsMetric, setIdleProductsMetric] = useState<IdleProductsMetric>("quantity");
   const [topProductsMetric, setTopProductsMetric] = useState<TopProductsMetric>("value");
   const [topProductsPeriod, setTopProductsPeriod] = useState<TopProductsPeriod>("week");
   const [waterfallRange, setWaterfallRange] = useState<WaterfallRange>("week");
+  const [comparisonWindow, setComparisonWindow] = useState<number>(DEFAULT_COMPARISON_WINDOW);
+  const [dailyWindow, setDailyWindow] = useState<number>(DEFAULT_DAILY_WINDOW);
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [userStartDate, setUserStartDate] = useState("");
   const [userEndDate, setUserEndDate] = useState("");
@@ -832,108 +990,335 @@ function DashboardContent() {
   const monthStats = windowStats(thresholds.month);
   const yearStats = windowStats(thresholds.year);
 
-  const movementSeries = useMemo(() => {
+  const comparisonSeries = useMemo<ComparisonPoint[]>(() => {
     const reference = new Date();
-    const segments: { label: string; start: number; end: number; date: Date }[] = [];
 
-    if (movementRange === "day") {
-      for (let index = 29; index >= 0; index -= 1) {
-        const date = startOfDay(subDays(reference, index));
-        segments.push({
-          label: formatDay(date),
-          start: date.getTime(),
-          end: addDays(date, 1).getTime(),
-          date
-        });
+    const buildSegments = (mode: ComparisonSeriesKey, count: number) => {
+      const ranges: Array<{ label: string; description: string; start: number; end: number }> = [];
+
+      for (let index = count - 1; index >= 0; index -= 1) {
+        if (mode === "week") {
+          const weekStart = startOfWeek(subWeeks(reference, index));
+          const weekEnd = addWeeks(weekStart, 1);
+          ranges.push({
+            label: format(weekStart, "dd/MM", { locale: ptBR }),
+            description: `${format(weekStart, "dd MMM", { locale: ptBR })} - ${format(subDays(weekEnd, 1), "dd MMM", { locale: ptBR })}`,
+            start: weekStart.getTime(),
+            end: weekEnd.getTime()
+          });
+        } else if (mode === "month") {
+          const monthStart = startOfMonth(subMonths(reference, index));
+          const monthEnd = addMonths(monthStart, 1);
+          ranges.push({
+            label: format(monthStart, "MMM/yy", { locale: ptBR }),
+            description: format(monthStart, "MMMM yyyy", { locale: ptBR }),
+            start: monthStart.getTime(),
+            end: monthEnd.getTime()
+          });
+        } else {
+          const yearStart = startOfYear(subYears(reference, index));
+          const yearEnd = addYears(yearStart, 1);
+          ranges.push({
+            label: format(yearStart, "yyyy", { locale: ptBR }),
+            description: `Ano de ${format(yearStart, "yyyy", { locale: ptBR })}`,
+            start: yearStart.getTime(),
+            end: yearEnd.getTime()
+          });
+        }
       }
-    } else if (movementRange === "week") {
-      for (let index = 11; index >= 0; index -= 1) {
-        const weekStart = startOfWeek(subWeeks(reference, index));
-        segments.push({
-          label: format(weekStart, "dd/MM", { locale: ptBR }),
-          start: weekStart.getTime(),
-          end: addWeeks(weekStart, 1).getTime(),
-          date: weekStart
-        });
-      }
-    } else if (movementRange === "month") {
-      for (let index = 11; index >= 0; index -= 1) {
-        const monthStart = startOfMonth(subMonths(reference, index));
-        segments.push({
-          label: format(monthStart, "MMM/yy", { locale: ptBR }),
-          start: monthStart.getTime(),
-          end: addMonths(monthStart, 1).getTime(),
-          date: monthStart
-        });
-      }
-    } else {
-      for (let index = 4; index >= 0; index -= 1) {
-        const yearStart = startOfYear(subYears(reference, index));
-        segments.push({
-          label: format(yearStart, "yyyy", { locale: ptBR }),
-          start: yearStart.getTime(),
-          end: addYears(yearStart, 1).getTime(),
-          date: yearStart
-        });
-      }
+
+      return ranges.map(({ label, description, start, end }) => {
+        let totalQty = 0;
+        let totalVal = 0;
+
+        for (const movement of lineFilteredMovements) {
+          if (movement.timestamp >= start && movement.timestamp < end) {
+            const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+            const unitPrice = Number(movement.product?.unitPrice ?? 0);
+            totalQty += quantity;
+            totalVal += unitPrice * quantity;
+          }
+        }
+
+        return {
+          label,
+          description,
+          quantity: totalQty,
+          value: totalVal
+        };
+      });
+    };
+
+    const weeklySegments = buildSegments("week", 12);
+    const monthlySegments = buildSegments("month", 12);
+    const yearlySegments = buildSegments("year", 12);
+
+    const maxLength = Math.max(weeklySegments.length, monthlySegments.length, yearlySegments.length);
+    const weekOffset = maxLength - weeklySegments.length;
+    const monthOffset = maxLength - monthlySegments.length;
+    const yearOffset = maxLength - yearlySegments.length;
+
+    const dataset: ComparisonPoint[] = [];
+
+    for (let index = 0; index < maxLength; index += 1) {
+      const weekEntry = index >= weekOffset ? weeklySegments[index - weekOffset] : undefined;
+      const monthEntry = index >= monthOffset ? monthlySegments[index - monthOffset] : undefined;
+      const yearEntry = index >= yearOffset ? yearlySegments[index - yearOffset] : undefined;
+
+      const axisLabel = monthEntry?.label ?? weekEntry?.label ?? yearEntry?.label ?? `P${index + 1}`;
+
+      dataset.push({
+        name: axisLabel,
+        weekValue: weekEntry ? weekEntry.value : null,
+        weekQuantity: weekEntry ? weekEntry.quantity : null,
+        weekLabel: weekEntry?.description ?? null,
+        monthValue: monthEntry ? monthEntry.value : null,
+        monthQuantity: monthEntry ? monthEntry.quantity : null,
+        monthLabel: monthEntry?.description ?? null,
+        yearValue: yearEntry ? yearEntry.value : null,
+        yearQuantity: yearEntry ? yearEntry.quantity : null,
+        yearLabel: yearEntry?.description ?? null
+      });
     }
 
-    return segments.map(({ label, start, end, date }) => {
-      let totalQty = 0;
-      let totalVal = 0;
+    return dataset;
+  }, [lineFilteredMovements]);
+
+  const toggleComparisonKey = (key: ComparisonSeriesKey) => {
+    setActiveComparisonKeys((previous) => {
+      if (previous.includes(key)) {
+        if (previous.length === 1) {
+          return previous;
+        }
+        return previous.filter((item) => item !== key);
+      }
+      const next = [...previous, key];
+      next.sort(
+        (a, b) => COMPARISON_KEY_ORDER.indexOf(a) - COMPARISON_KEY_ORDER.indexOf(b)
+      );
+      return next;
+    });
+  };
+
+  const comparisonSeriesView = useMemo(() => {
+    if (comparisonWindow <= 0) {
+      return comparisonSeries;
+    }
+    return comparisonSeries.slice(-comparisonWindow);
+  }, [comparisonSeries, comparisonWindow]);
+
+  const dailyColumnsSeries = useMemo<DailyColumnPoint[]>(() => {
+    const reference = new Date();
+    const segments: Array<{ name: string; start: number; end: number; label: string }> = [];
+
+    for (let index = MAX_DAILY_POINTS - 1; index >= 0; index -= 1) {
+      const day = startOfDay(subDays(reference, index));
+      const end = addDays(day, 1);
+      segments.push({
+        name: format(day, "dd/MM", { locale: ptBR }),
+        start: day.getTime(),
+        end: end.getTime(),
+        label: format(day, "dd 'de' MMMM yyyy", { locale: ptBR })
+      });
+    }
+
+    return segments.map(({ name, start, end, label }) => {
+      let totalValue = 0;
+      let totalQuantity = 0;
 
       for (const movement of lineFilteredMovements) {
         if (movement.timestamp >= start && movement.timestamp < end) {
-          const quantity = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
-          const unitPrice = movement.product?.unitPrice ?? 0;
-          totalQty += quantity;
-          totalVal += unitPrice * quantity;
+          const qty = Math.abs(Number(movement.effectiveQty ?? movement.qty ?? 0));
+          const unitPrice = Number(movement.product?.unitPrice ?? 0);
+          totalQuantity += qty;
+          totalValue += unitPrice * qty;
         }
       }
 
       return {
+        name,
         label,
-        date: date.toISOString(),
-        value: totalVal,
-        quantity: totalQty
+        value: totalValue,
+        quantity: totalQuantity
       };
     });
-  }, [lineFilteredMovements, movementRange]);
+  }, [lineFilteredMovements]);
 
-  const categoryDonutData = useMemo(
-    () =>
-      Object.entries(valueByCategory)
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value),
-    [valueByCategory]
-  );
+  const dailyColumnsView = useMemo(() => {
+    const window = Math.max(1, dailyWindow);
+    return dailyColumnsSeries.slice(-window);
+  }, [dailyColumnsSeries, dailyWindow]);
 
-  const supplierDonutData = useMemo(() => {
-    const entries = Object.entries(valueBySupplier)
+  const categoryDonutData = useMemo<CosmicDonutDatum[]>(() => {
+    const entries = Object.entries(valueByCategory)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+    const totalValue = entries.reduce((accumulator, item) => accumulator + item.value, 0);
+    return entries.map((entry, index) => ({
+      ...entry,
+      color: COSMIC_DONUT_COLORS[index % COSMIC_DONUT_COLORS.length],
+      helper:
+        totalValue > 0 ? `${((entry.value / totalValue) * 100).toFixed(1)}% do total` : undefined
+    }));
+  }, [valueByCategory]);
+
+  const supplierDonutData = useMemo<CosmicDonutDatum[]>(() => {
+    const rawEntries = Object.entries(valueBySupplier)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
 
-    if (entries.length <= SUPPLIER_DONUT_MAX_SLICES) {
-      return entries;
+    let entries: Array<{ name: string; value: number; helper?: string }> = rawEntries;
+    if (rawEntries.length > SUPPLIER_DONUT_MAX_SLICES) {
+      const limit = Math.max(SUPPLIER_DONUT_MAX_SLICES - 1, 1);
+      const topSuppliers = rawEntries.slice(0, limit);
+      const remaining = rawEntries.slice(limit);
+      const othersTotal = remaining.reduce((accumulator, item) => accumulator + item.value, 0);
+      entries =
+        othersTotal > 0
+          ? [
+              ...topSuppliers,
+              {
+                name: `Outros (+${remaining.length})`,
+                value: othersTotal,
+                helper: `${remaining.length} fornecedores agrupados`
+              }
+            ]
+          : topSuppliers;
     }
 
-    const limit = Math.max(SUPPLIER_DONUT_MAX_SLICES - 1, 1);
-    const topSuppliers = entries.slice(0, limit);
-    const remaining = entries.slice(limit);
-    const othersTotal = remaining.reduce((accumulator, item) => accumulator + item.value, 0);
+    const totalValue = entries.reduce((accumulator, item) => accumulator + item.value, 0);
+    return entries.map((entry, index) => ({
+      ...entry,
+      color: COSMIC_DONUT_COLORS[index % COSMIC_DONUT_COLORS.length],
+      helper:
+        entry.helper ??
+        (totalValue > 0 ? `${((entry.value / totalValue) * 100).toFixed(1)}% do total` : undefined)
+    }));
+  }, [valueBySupplier]);
 
-    if (othersTotal <= 0) {
-      return topSuppliers;
+  const supplierProductDonuts = useMemo(() => {
+    if (!visibleProducts.length) {
+      return new Map<string, ProductGroupDetail>();
     }
+    return buildProductGroupDetails(
+      visibleProducts,
+      productSalesAggregates,
+      (product) => product.supplier?.trim() || "Sem fornecedor"
+    );
+  }, [visibleProducts, productSalesAggregates]);
+
+  const categoryProductDonuts = useMemo(() => {
+    if (!visibleProducts.length) {
+      return new Map<string, ProductGroupDetail>();
+    }
+    return buildProductGroupDetails(
+      visibleProducts,
+      productSalesAggregates,
+      (product) => product.category?.trim() || "Sem categoria"
+    );
+  }, [visibleProducts, productSalesAggregates]);
+
+  useEffect(() => {
+    setSelectedSuppliers((current) => current.filter((supplier) => supplierProductDonuts.has(supplier)));
+  }, [supplierProductDonuts]);
+
+  useEffect(() => {
+    if (!selectedCategory) {
+      return;
+    }
+    if (!categoryProductDonuts.has(selectedCategory)) {
+      setSelectedCategory(null);
+    }
+  }, [categoryProductDonuts, selectedCategory]);
+
+  const activeSupplier = selectedSuppliers[0] ?? null;
+  const activeCategory = selectedCategory;
+
+  const toggleSupplierSelection = useCallback((supplierName: string) => {
+    setSelectedSuppliers((prev) => (prev.includes(supplierName) ? [] : [supplierName]));
+  }, []);
+
+  const toggleCategorySelection = useCallback((categoryName: string) => {
+    setSelectedCategory((prev) => (prev === categoryName ? null : categoryName));
+  }, []);
+
+  const supplierSupplementarySections = useMemo(() => {
+    if (!activeSupplier) {
+      return [];
+    }
+
+    const detail = supplierProductDonuts.get(activeSupplier);
+    if (!detail) {
+      return [];
+    }
+
+    const valueSubtitle = detail.value.length
+      ? `${detail.value.length} produto(s)`
+      : "Sem produtos para exibir";
+    const quantitySubtitle = detail.quantity.length
+      ? `${detail.quantity.length} produto(s)`
+      : "Sem produtos para exibir";
 
     return [
-      ...topSuppliers,
       {
-        name: `Outros (+${remaining.length})`,
-        value: othersTotal
+        id: `supplier-${activeSupplier}-value`,
+        title: "Produtos por valor",
+        subtitle: valueSubtitle,
+        data: detail.value,
+        valueFormatter: currency,
+        totalFormatter: currency,
+        emptyMessage: "Sem produtos para exibir."
+      },
+      {
+        id: `supplier-${activeSupplier}-quantity`,
+        title: "Produtos por quantidade",
+        subtitle: quantitySubtitle,
+        data: detail.quantity,
+        valueFormatter: formatUnits,
+        totalFormatter: formatUnits,
+        emptyMessage: "Sem produtos para exibir."
       }
     ];
-  }, [valueBySupplier]);
+  }, [activeSupplier, supplierProductDonuts]);
+
+  const categorySupplementarySections = useMemo(() => {
+    if (!activeCategory) {
+      return [];
+    }
+
+    const detail = activeCategory ? categoryProductDonuts.get(activeCategory) : undefined;
+    if (!detail) {
+      return [];
+    }
+
+    const valueSubtitle = detail.value.length
+      ? `${detail.value.length} produto(s)`
+      : "Sem produtos para exibir";
+    const quantitySubtitle = detail.quantity.length
+      ? `${detail.quantity.length} produto(s)`
+      : "Sem produtos para exibir";
+
+    return [
+      {
+        id: `category-${activeCategory}-value`,
+        title: "Produtos por valor",
+        subtitle: valueSubtitle,
+        data: detail.value,
+        valueFormatter: currency,
+        totalFormatter: currency,
+        emptyMessage: "Sem produtos para exibir."
+      },
+      {
+        id: `category-${activeCategory}-quantity`,
+        title: "Produtos por quantidade",
+        subtitle: quantitySubtitle,
+        data: detail.quantity,
+        valueFormatter: formatUnits,
+        totalFormatter: formatUnits,
+        emptyMessage: "Sem produtos para exibir."
+      }
+    ];
+  }, [activeCategory, categoryProductDonuts]);
 
   const idleProductsData = useMemo<ProductsBarDatum[]>(() => {
     if (!visibleProducts.length) {
@@ -1105,10 +1490,14 @@ function DashboardContent() {
     return series;
   }, [lineFilteredMovements, waterfallRange, totalValue]);
 
-  const movementRangeLabel = MOVEMENT_RANGE_OPTIONS.find((option) => option.value === movementRange)?.label ?? "";
   const hasStockFilters =
     Boolean(categoryFilter || supplierFilter || productFilter || productLineFilter !== "all") ||
-    movementRange !== "day";
+  activeComparisonKeys.length !== DEFAULT_COMPARISON_KEYS.length ||
+  DEFAULT_COMPARISON_KEYS.some((key) => !activeComparisonKeys.includes(key)) ||
+  comparisonWindow !== DEFAULT_COMPARISON_WINDOW ||
+  dailyWindow !== DEFAULT_DAILY_WINDOW ||
+  Boolean(activeSupplier) ||
+  Boolean(activeCategory);
   const hasCurrentTabFilters = activeTab === "stock" ? hasStockFilters : hasUserFilters;
   const tabCopy =
     activeTab === "stock"
@@ -1125,8 +1514,12 @@ function DashboardContent() {
     setCategoryFilter("");
     setSupplierFilter("");
     setProductFilter("");
-    setMovementRange("day");
     setProductLineFilter("all");
+    setActiveComparisonKeys([...DEFAULT_COMPARISON_KEYS]);
+    setComparisonWindow(DEFAULT_COMPARISON_WINDOW);
+    setDailyWindow(DEFAULT_DAILY_WINDOW);
+    setSelectedSuppliers([]);
+    setSelectedCategory(null);
   };
 
   const handleClearFilters = () => {
@@ -1156,156 +1549,143 @@ function DashboardContent() {
   return (
     <div className="space-y-8">
       <header>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900">{tabCopy.title}</h1>
-              <p className="text-sm text-slate-500">{tabCopy.description}</p>
-            </div>
-            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
-              <div className="inline-flex rounded-full bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("stock")}
-                  className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
-                    activeTab === "stock"
-                      ? "bg-white text-slate-900 shadow"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Estoque
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("users")}
-                  className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
-                    activeTab === "users"
-                      ? "bg-white text-slate-900 shadow"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Usuarios
-                </button>
+        <div className="relative overflow-hidden rounded-[36px] border border-white/10 bg-slate-950/60 p-6 shadow-2xl shadow-purple-900/20 backdrop-blur">
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-500/20 via-indigo-500/10 to-cyan-500/20" />
+          <div className="pointer-events-none absolute -top-32 -left-24 h-64 w-64 rounded-full bg-purple-500/25 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-36 right-0 h-72 w-72 rounded-full bg-cyan-500/25 blur-3xl" />
+
+          <div className="relative z-10 flex flex-col gap-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h1 className="text-3xl font-semibold text-white drop-shadow-sm">{tabCopy.title}</h1>
+                <p className="text-sm font-medium text-white/70">{tabCopy.description}</p>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="self-start rounded-lg px-3 text-sm font-semibold text-slate-600 hover:text-slate-900"
-                onClick={handleClearFilters}
-                disabled={!hasCurrentTabFilters}
-              >
-                Limpar filtros
-              </Button>
+              <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
+                <div className="inline-flex rounded-full border border-white/10 bg-white/10 p-1 shadow-inner shadow-purple-500/20 backdrop-blur">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("stock")}
+                    className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
+                      activeTab === "stock"
+                        ? "bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-400 text-slate-900 shadow-lg shadow-cyan-500/40"
+                        : "text-white/70 hover:text-white"
+                    }`}
+                  >
+                    Estoque
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("users")}
+                    className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
+                      activeTab === "users"
+                        ? "bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-400 text-slate-900 shadow-lg shadow-cyan-500/40"
+                        : "text-white/70 hover:text-white"
+                    }`}
+                  >
+                    Usuarios
+                  </button>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="self-start rounded-full border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white/80 shadow-md shadow-cyan-500/10 transition hover:bg-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={handleClearFilters}
+                  disabled={!hasCurrentTabFilters}
+                >
+                  Limpar filtros
+                </Button>
+              </div>
             </div>
+
+            {activeTab === "stock" ? (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-inner shadow-indigo-500/10 backdrop-blur">
+                  <Label
+                    htmlFor="dashboard-category"
+                    className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60"
+                  >
+                    Categoria
+                  </Label>
+                  <Select
+                    id="dashboard-category"
+                    value={categoryFilter}
+                    onChange={(event) => setCategoryFilter(event.target.value)}
+                    className="mt-2 min-w-[200px] border-white/20 bg-white/15 text-sm font-medium text-white shadow-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/40"
+                  >
+                    <option value="">Todas as categorias</option>
+                    {categories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-inner shadow-indigo-500/10 backdrop-blur">
+                  <Label
+                    htmlFor="dashboard-supplier"
+                    className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60"
+                  >
+                    Fornecedor
+                  </Label>
+                  <Select
+                    id="dashboard-supplier"
+                    value={supplierFilter}
+                    onChange={(event) => setSupplierFilter(event.target.value)}
+                    className="mt-2 min-w-[200px] border-white/20 bg-white/15 text-sm font-medium text-white shadow-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/40"
+                  >
+                    <option value="">Todos os fornecedores</option>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier} value={supplier}>
+                        {supplier}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-inner shadow-indigo-500/10 backdrop-blur">
+                  <Label
+                    htmlFor="dashboard-product"
+                    className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60"
+                  >
+                    Produto
+                  </Label>
+                  <Select
+                    id="dashboard-product"
+                    value={productFilter}
+                    onChange={(event) => setProductFilter(event.target.value)}
+                    className="mt-2 min-w-[200px] border-white/20 bg-white/15 text-sm font-medium text-white shadow-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/40"
+                  >
+                    <option value="">Todos os produtos</option>
+                    {productOptions.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} ({product.sku})
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-inner shadow-indigo-500/10 backdrop-blur">
+                  <Label
+                    htmlFor="dashboard-line"
+                    className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60"
+                  >
+                    Linha
+                  </Label>
+                  <Select
+                    id="dashboard-line"
+                    value={productLineFilter}
+                    onChange={(event) => setProductLineFilter(event.target.value as "all" | ProductLine)}
+                    className="mt-2 min-w-[200px] border-white/20 bg-white/15 text-sm font-medium text-white shadow-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/40"
+                  >
+                    {PRODUCT_LINE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            ) : null}
           </div>
-          {activeTab === "stock" ? (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <div className="space-y-1">
-                <Label
-                  htmlFor="dashboard-category"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Categoria
-                </Label>
-                <Select
-                  id="dashboard-category"
-                  value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="min-w-[200px]"
-                >
-                  <option value="">Todas as categorias</option>
-                  {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label
-                  htmlFor="dashboard-supplier"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Fornecedor
-                </Label>
-                <Select
-                  id="dashboard-supplier"
-                  value={supplierFilter}
-                  onChange={(event) => setSupplierFilter(event.target.value)}
-                  className="min-w-[200px]"
-                >
-                  <option value="">Todos os fornecedores</option>
-                  {suppliers.map((supplier) => (
-                    <option key={supplier} value={supplier}>
-                      {supplier}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label
-                  htmlFor="dashboard-product"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Produto
-                </Label>
-                <Select
-                  id="dashboard-product"
-                  value={productFilter}
-                  onChange={(event) => setProductFilter(event.target.value)}
-                  className="min-w-[200px]"
-                >
-                  <option value="">Todos os produtos</option>
-                  {productOptions.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name} ({product.sku})
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label
-                  htmlFor="dashboard-line"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Linha
-                </Label>
-                <Select
-                  id="dashboard-line"
-                  value={productLineFilter}
-                  onChange={(event) => setProductLineFilter(event.target.value as "all" | ProductLine)}
-                  className="min-w-[200px]"
-                >
-                  {PRODUCT_LINE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label
-                  htmlFor="dashboard-range"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Periodo
-                </Label>
-                <Select
-                  id="dashboard-range"
-                  value={movementRange}
-                  onChange={(event) => setMovementRange(event.target.value as MovementRange)}
-                  className="min-w-[200px]"
-                >
-                  {MOVEMENT_RANGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          ) : null}
         </div>
       </header>
 
@@ -1313,52 +1693,118 @@ function DashboardContent() {
         <div className="flex min-h-[200px] items-center justify-center text-slate-500">Carregando metricas...</div>
       ) : activeTab === "stock" ? (
         <>
-          <section className="grid gap-4">
-            {movementSeries.length ? (
-              <BarTimeseries
-                data={movementSeries}
-                title={`Saidas ${movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}`}
-              />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                  Saidas {movementRangeLabel ? `(${movementRangeLabel.toLowerCase()})` : ""}
-                </h3>
-                <p className="text-sm text-slate-500">Sem movimentacoes para o periodo selecionado.</p>
-              </div>
-            )}
-          </section>
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <StatsCard label="Itens em estoque" value={totalItems.toLocaleString("pt-BR")} />
-            <StatsCard label="Valor em estoque" value={currency(totalValue)} />
-            <StatsCard label="Saidas hoje" value={`${todayStats.totalQty} itens`} description={currency(todayStats.totalVal)} />
-            <StatsCard label="Saidas na semana" value={`${weekStats.totalQty} itens`} description={currency(weekStats.totalVal)} />
+            <StatsCard label="Itens em estoque" value={totalItems.toLocaleString("pt-BR")} accent="default" />
+            <StatsCard label="Valor em estoque" value={currency(totalValue)} accent="success" />
+            <StatsCard label="Saidas hoje" value={`${todayStats.totalQty} itens`} description={currency(todayStats.totalVal)} accent="danger" />
+            <StatsCard label="Saidas na semana" value={`${weekStats.totalQty} itens`} description={currency(weekStats.totalVal)} accent="default" />
+            <StatsCard className="xl:col-span-2" label="Saidas no mes" value={`${monthStats.totalQty} itens`} description={currency(monthStats.totalVal)} accent="success" />
+            <StatsCard className="xl:col-span-2" label="Saidas no ano" value={`${yearStats.totalQty} itens`} description={currency(yearStats.totalVal)} accent="danger" />
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-[3fr,2fr]">
-            <StatsCard label="Saidas no mes" value={`${monthStats.totalQty} itens`} description={currency(monthStats.totalVal)} />
-            <StatsCard label="Saidas no ano" value={`${yearStats.totalQty} itens`} description={currency(yearStats.totalVal)} />
+          <section className="grid gap-4 xl:grid-cols-2 auto-rows-fr">
+            <DailyColumnsChart
+              className="h-full"
+              data={dailyColumnsView}
+              title="Saidas diarias"
+              emptyMessage="Sem movimentacoes registradas nos dias recentes."
+              headerActions={
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    Periodo
+                  </span>
+                  {DAILY_WINDOW_OPTIONS.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant={dailyWindow === option.value ? "default" : "ghost"}
+                      className={`rounded-full px-3 text-xs font-semibold ${dailyWindow === option.value ? "" : "border border-slate-300 dark:border-slate-700"}`}
+                      onClick={() => setDailyWindow(option.value)}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              }
+            />
+            <ComparisonAreaChart
+              className="h-full"
+              data={comparisonSeriesView}
+              title="Saidas (comparativo)"
+              activeKeys={activeComparisonKeys}
+              emptyMessage="Sem movimentacoes suficientes para comparar os periodos selecionados."
+              headerActions={
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {COMPARISON_OPTIONS.map((option) => {
+                      const isActive = activeComparisonKeys.includes(option.key);
+                      return (
+                        <Button
+                          key={option.key}
+                          type="button"
+                          size="sm"
+                          variant={isActive ? "default" : "ghost"}
+                          className={`rounded-full px-3 text-xs font-semibold ${isActive ? "" : "border border-slate-300 dark:border-slate-700"}`}
+                          onClick={() => toggleComparisonKey(option.key)}
+                          disabled={isActive && activeComparisonKeys.length === 1}
+                        >
+                          {option.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      Zoom
+                    </span>
+                    {COMPARISON_WINDOW_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        type="button"
+                        size="sm"
+                        variant={comparisonWindow === option.value ? "default" : "ghost"}
+                        className={`rounded-full px-3 text-xs font-semibold ${comparisonWindow === option.value ? "" : "border border-slate-300 dark:border-slate-700"}`}
+                        onClick={() => setComparisonWindow(option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              }
+            />
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {categoryDonutData.length ? (
-              <Donut data={categoryDonutData} title="Valor por categoria" />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por categoria</h3>
-                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
-              </div>
-            )}
-            {supplierDonutData.length ? (
-              <Donut data={supplierDonutData} title="Valor por fornecedor" />
-            ) : (
-              <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Valor por fornecedor</h3>
-                <p className="text-sm text-slate-500">Sem dados para exibir.</p>
-              </div>
-            )}
+          <section className="grid gap-4 xl:grid-cols-2 auto-rows-fr">
+            <CosmicDonutPanel
+              data={categoryDonutData}
+              title="Valor por categoria"
+              subtitle={`${categoryDonutData.length} categorias`}
+              valueFormatter={currency}
+              totalFormatter={currency}
+              selectable
+              selectedKeys={activeCategory ? [activeCategory] : []}
+              onSelectItem={toggleCategorySelection}
+              maxVisibleItems={10}
+              supplementaryDonuts={categorySupplementarySections}
+            />
+            <CosmicDonutPanel
+              data={supplierDonutData}
+              title="Valor por fornecedor"
+              subtitle={`${supplierDonutData.length} fornecedores`}
+              valueFormatter={currency}
+              totalFormatter={currency}
+              selectable
+              selectedKeys={activeSupplier ? [activeSupplier] : []}
+              onSelectItem={toggleSupplierSelection}
+              maxVisibleItems={10}
+              supplementaryDonuts={supplierSupplementarySections}
+            />
+          </section>
+
+          <section className="grid gap-4">
             <ProductsBarChart
-              className="md:col-span-2 xl:col-span-3"
               data={topProductsData}
               title="Produtos com mais saida"
               valueFormatter={topProductsValueFormatter}
@@ -1370,7 +1816,7 @@ function DashboardContent() {
                   <Select
                     value={topProductsMetric}
                     onChange={(event) => setTopProductsMetric(event.target.value as TopProductsMetric)}
-                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                   >
                     {TOP_PRODUCTS_METRIC_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -1381,7 +1827,7 @@ function DashboardContent() {
                   <Select
                     value={topProductsPeriod}
                     onChange={(event) => setTopProductsPeriod(event.target.value as TopProductsPeriod)}
-                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                   >
                     {TOP_PRODUCTS_PERIOD_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -1393,6 +1839,7 @@ function DashboardContent() {
               }
             />
           </section>
+
           <section className="grid gap-4 xl:grid-cols-[3fr,2fr]">
             <ProductsBarChart
               className="xl:col-span-2"
@@ -1406,7 +1853,7 @@ function DashboardContent() {
                 <Select
                   value={idleProductsMetric}
                   onChange={(event) => setIdleProductsMetric(event.target.value as IdleProductsMetric)}
-                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                 >
                   {IDLE_METRIC_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -1425,7 +1872,7 @@ function DashboardContent() {
                 <Select
                   value={waterfallRange}
                   onChange={(event) => setWaterfallRange(event.target.value as WaterfallRange)}
-                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-9 min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium uppercase tracking-wide text-slate-600 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                 >
                   {WATERFALL_RANGE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -1441,13 +1888,12 @@ function DashboardContent() {
         <>
           {userOptions.length ? (
             <section className="grid gap-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900">Atividade por usuario</h2>
                     <p className="text-sm text-slate-500">
-                      Selecione usuarios para ver quantas saidas foram bipadas, categorias mais frequentes e produtos
-                      destacados no periodo escolhido.
+                      Selecione usuarios para ver quantas saidas foram bipadas, categorias mais frequentes e produtos destacados no periodo escolhido.
                     </p>
                   </div>
                   <Button
@@ -1504,7 +1950,7 @@ function DashboardContent() {
                           id="dashboard-user-metric"
                           value={userMetric}
                           onChange={(event) => setUserMetric(event.target.value as UserMetric)}
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                         >
                           <option value="quantity">Embalados</option>
                           <option value="actions">Movimentacoes</option>
@@ -1546,9 +1992,7 @@ function DashboardContent() {
                             key={user.id}
                             type="button"
                             variant="outline"
-                            className={`w-full justify-start text-left ${
-                              active ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-900" : ""
-                            }`}
+                            className={`w-full justify-start text-left ${active ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-900" : ""}`}
                             onClick={() => handleToggleUser(user.id)}
                             title={user.name}
                           >
@@ -1565,11 +2009,7 @@ function DashboardContent() {
               </div>
 
               {comparisonData.length ? (
-                <UserComparisonChart
-                  data={comparisonData}
-                  title={comparisonTitle}
-                  quantityLabel={comparisonValueLabel}
-                />
+                <UserComparisonChart data={comparisonData} title={comparisonTitle} quantityLabel={comparisonValueLabel} />
               ) : null}
               {selectedUsers.length ? (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1578,96 +2018,34 @@ function DashboardContent() {
                     const hasActivity = summary.totalQuantity > 0 || summary.totalActions > 0;
                     const accent = USER_CARD_STYLES[index % USER_CARD_STYLES.length];
                     const primaryMetricLabel = userMetric === "quantity" ? "Embalados" : "Movimentacoes";
-                    const primaryMetricValue =
-                      userMetric === "quantity" ? summary.totalQuantity : summary.totalActions;
+                    const primaryMetricValue = userMetric === "quantity" ? summary.totalQuantity : summary.totalActions;
                     const secondaryMetricText =
                       userMetric === "quantity"
                         ? `${summary.totalActions.toLocaleString("pt-BR")} movimentacoes gerais`
                         : `${summary.totalQuantity.toLocaleString("pt-BR")} embalados`;
 
                     return (
-                      <motion.div
+                      <UserActivityCard
                         key={summary.id}
-                        className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${accent.border}`}
-                        whileHover={{ y: -4, scale: 1.02 }}
-                        whileTap={{ scale: 0.97 }}
-                        transition={{ duration: 0.25, ease: "easeOut" }}
-                      >
-                        <div className={`bg-gradient-to-r px-5 py-4 text-white ${accent.gradient}`}>
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                              <h3 className="text-2xl font-semibold text-white">{summary.name}</h3>
-                              <p className="text-xs text-white/80">{secondaryMetricText}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-xs uppercase tracking-wide text-white/80">{primaryMetricLabel}</p>
-                              <p className="text-3xl font-bold text-white">
-                                {primaryMetricValue.toLocaleString("pt-BR")}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-4 p-5">
-                          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
-                              <dt className="text-xs uppercase tracking-wide text-slate-500">Valor movimentado</dt>
-                              <dd className={`text-base font-semibold ${accent.metric}`}>
-                                {currency(summary.totalValue)}
-                              </dd>
-                            </div>
-                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
-                              <dt className="text-xs uppercase tracking-wide text-slate-500">Ultima saida</dt>
-                              <dd className="text-base font-semibold text-slate-700">
-                                {formatUserDate(summary.lastScan)}
-                              </dd>
-                            </div>
-                            <div className="rounded-xl bg-white/80 p-3 shadow-sm ring-1 ring-black/5">
-                              <dt className="text-xs uppercase tracking-wide text-slate-500">Primeira saida</dt>
-                              <dd className="text-base font-semibold text-slate-700">
-                                {formatUserDate(summary.firstScan)}
-                              </dd>
-                            </div>
-                          </dl>
-
-                          {hasActivity ? (
-                            <div className="rounded-2xl bg-slate-50 p-4 shadow-inner">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Produtos mais bipados
-                              </p>
-                              <ul className="mt-3 space-y-2 text-sm">
-                                {topProducts.map((product) => (
-                                  <li
-                                    key={`${summary.id}-${product.id}`}
-                                    className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 shadow-sm"
-                                  >
-                                    <span className="truncate pr-2 font-medium text-slate-700">{product.name}</span>
-                                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${accent.pill}`}>
-                                      {product.quantity.toLocaleString("pt-BR")} itens
-                                    </span>
-                                  </li>
-                                ))}
-                                {!topProducts.length ? (
-                                  <li className="rounded-xl bg-white px-3 py-2 text-sm text-slate-500 shadow-sm">
-                                    Sem produtos destacados no periodo.
-                                  </li>
-                                ) : null}
-                              </ul>
-                            </div>
-                          ) : (
-                            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 shadow-inner">
-                              Sem movimentacoes para este usuario no periodo selecionado.
-                            </div>
-                          )}
-                        </div>
-                      </motion.div>
+                        accent={accent}
+                        name={summary.name}
+                        primaryMetricLabel={primaryMetricLabel}
+                        primaryMetricValue={primaryMetricValue.toLocaleString("pt-BR")}
+                        secondaryMetricText={secondaryMetricText}
+                        formattedTotalValue={currency(summary.totalValue)}
+                        lastScanText={formatUserDate(summary.lastScan)}
+                        firstScanText={formatUserDate(summary.firstScan)}
+                        topProducts={topProducts}
+                        hasActivity={hasActivity}
+                        index={index}
+                      />
                     );
                   })}
                 </div>
               ) : null}
             </section>
           ) : (
-            <div className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm">
+            <div className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm dark:bg-slate-900 dark:text-slate-400">
               Nenhum usuario com movimentacoes para exibir.
             </div>
           )}
@@ -1677,7 +2055,253 @@ function DashboardContent() {
   );
 }
 
+interface FloatingParticle {
+  id: number;
+  x: number;
+  y: number;
+  size: number;
+  duration: number;
+  delay: number;
+}
 
+type CardMouseState = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
+interface UserActivityCardProps {
+  accent: UserCardStyle;
+  name: string;
+  primaryMetricLabel: string;
+  primaryMetricValue: string;
+  secondaryMetricText: string;
+  formattedTotalValue: string;
+  lastScanText: string;
+  firstScanText: string;
+  topProducts: Array<UserActivitySummary["topProducts"][number]>;
+  hasActivity: boolean;
+  index: number;
+}
 
+function UserActivityCard({
+  accent,
+  name,
+  primaryMetricLabel,
+  primaryMetricValue,
+  secondaryMetricText,
+  formattedTotalValue,
+  lastScanText,
+  firstScanText,
+  topProducts,
+  hasActivity,
+  index
+}: UserActivityCardProps) {
+  const baseTransform = "perspective(1200px) rotateX(0deg) rotateY(0deg) scale(1) translateZ(0)";
+  const [transform, setTransform] = useState(baseTransform);
+  const [glowIntensity, setGlowIntensity] = useState(0);
+  const [isHovered, setIsHovered] = useState(false);
+  const [mousePosition, setMousePosition] = useState<CardMouseState>({ x: 0, y: 0, width: 0, height: 0 });
+  const [particles, setParticles] = useState<FloatingParticle[]>([]);
 
+  useEffect(() => {
+    const generatedParticles: FloatingParticle[] = Array.from({ length: 18 }, (_, idx) => ({
+      id: idx,
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      size: Math.random() * 2.5 + 1.5,
+      duration: Math.random() * 2 + 2.6,
+      delay: Math.random() * 1.5
+    }));
+    setParticles(generatedParticles);
+  }, []);
+
+  const handleMouseEnter = () => {
+    setIsHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
+    setTransform(baseTransform);
+    setGlowIntensity(0);
+    setMousePosition({ x: 0, y: 0, width: 0, height: 0 });
+  };
+
+  const handleMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    const rotateX = ((y / rect.height) - 0.5) * 15;
+    const rotateY = ((x / rect.width) - 0.5) * -15;
+
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+    const maxDistance = Math.sqrt(centerX ** 2 + centerY ** 2);
+    const intensity = Math.max(0, Math.min(1, 1 - distance / maxDistance));
+
+    const scale = 1.02 + intensity * 0.03;
+
+    setMousePosition({ x, y, width: rect.width, height: rect.height });
+    setGlowIntensity(intensity);
+    setTransform(
+      `perspective(1200px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(${scale.toFixed(4)}) translateZ(0)`
+    );
+  };
+
+  const cardDelay = Math.min(index * 0.05, 0.3);
+  const shineLeft = mousePosition.width ? mousePosition.x - mousePosition.width * 0.25 : 0;
+
+  return (
+    <motion.div
+      className="relative h-full w-full rounded-3xl"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay: cardDelay, ease: "easeOut" }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onMouseMove={handleMouseMove}
+      style={{
+        transform,
+        transformStyle: "preserve-3d",
+        transition: "transform 150ms ease-out",
+        willChange: "transform"
+      }}
+    >
+      <motion.div
+        className="pointer-events-none absolute inset-0 z-0 rounded-3xl opacity-0"
+        animate={{ opacity: Math.min(0.85, glowIntensity * 0.9) }}
+        style={{
+          background: accent.glowGradient,
+          filter: `blur(${20 + glowIntensity * 14}px)`
+        }}
+      />
+      <div className="relative z-10 overflow-hidden rounded-[28px]">
+        <motion.div
+          className="pointer-events-none absolute inset-0"
+          style={{ background: accent.conicGradient }}
+          animate={{ rotate: [0, 360] }}
+          transition={{ duration: 9, repeat: Infinity, ease: "linear" }}
+        />
+        <div
+          className={`relative z-10 m-[3px] flex h-full flex-col overflow-hidden rounded-[24px] border bg-white/95 p-5 shadow-xl backdrop-blur dark:bg-slate-950/90 dark:shadow-slate-950/30 ${accent.border}`}
+        >
+          <AnimatePresence>
+            {isHovered ? (
+              <motion.div
+                key="shine"
+                className="pointer-events-none absolute inset-0 z-40"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <div
+                  className="absolute top-0 h-full w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent"
+                  style={{
+                    left: `${shineLeft}px`,
+                    transform: "skewX(-18deg)"
+                  }}
+                />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+
+          {particles.map((particle) => (
+            <motion.div
+              key={particle.id}
+              className="pointer-events-none absolute z-20 rounded-full bg-white/60"
+              style={{
+                left: `${particle.x}%`,
+                top: `${particle.y}%`,
+                width: `${particle.size}px`,
+                height: `${particle.size}px`
+              }}
+              animate={{
+                y: [0, -18, 0],
+                opacity: [0, 0.6, 0],
+                scale: [0.8, 1.1, 0.8]
+              }}
+              transition={{
+                duration: particle.duration,
+                repeat: Infinity,
+                delay: particle.delay,
+                ease: "easeInOut"
+              }}
+            />
+          ))}
+
+          <div className="relative z-30 flex h-full flex-col gap-5">
+            <div className={`rounded-2xl border border-white/10 bg-gradient-to-r ${accent.gradient} px-5 py-4 text-white shadow-lg`}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-4">
+                  <motion.div
+                    className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/20 shadow-lg dark:bg-white/10"
+                    whileHover={{ rotate: 8, scale: 1.05 }}
+                    transition={{ type: "spring", stiffness: 220, damping: 16 }}
+                  >
+                    <Sparkles className="h-6 w-6 text-white" />
+                  </motion.div>
+                  <div>
+                    <h3 className="text-2xl font-semibold text-white">{name}</h3>
+                    <p className="text-xs text-white/80">{secondaryMetricText}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs uppercase tracking-wide text-white/70">{primaryMetricLabel}</p>
+                  <p className="text-3xl font-bold text-white">{primaryMetricValue}</p>
+                </div>
+              </div>
+            </div>
+
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              <div className="rounded-xl bg-white/85 p-3 shadow-sm ring-1 ring-white/50 backdrop-blur-sm dark:bg-slate-900/80 dark:ring-white/20">
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Valor movimentado</dt>
+                <dd className={`text-base font-semibold ${accent.metric}`}>{formattedTotalValue}</dd>
+              </div>
+              <div className="rounded-xl bg-white/85 p-3 shadow-sm ring-1 ring-white/50 backdrop-blur-sm dark:bg-slate-900/80 dark:ring-white/20">
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Ultima saida</dt>
+                <dd className="text-base font-semibold text-slate-700">{lastScanText}</dd>
+              </div>
+              <div className="rounded-xl bg-white/85 p-3 shadow-sm ring-1 ring-white/50 backdrop-blur-sm dark:bg-slate-900/80 dark:ring-white/20">
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Primeira saida</dt>
+                <dd className="text-base font-semibold text-slate-700">{firstScanText}</dd>
+              </div>
+            </dl>
+
+            {hasActivity ? (
+              <div className="rounded-2xl bg-slate-50/90 p-4 shadow-inner ring-1 ring-white/60 backdrop-blur-sm dark:bg-slate-900/70 dark:ring-white/10">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Produtos mais bipados</p>
+                <ul className="mt-3 space-y-2 text-sm">
+                  {topProducts.map((product) => (
+                    <motion.li
+                      key={`${name}-${product.id}`}
+                      className="flex items-center justify-between gap-3 rounded-xl bg-white/90 px-3 py-2 shadow-sm ring-1 ring-slate-200/60 backdrop-blur dark:bg-slate-900/80 dark:ring-slate-700/60"
+                      whileHover={{ scale: 1.03, translateY: -2 }}
+                      transition={{ type: "spring", stiffness: 260, damping: 18 }}
+                    >
+                      <span className="truncate pr-2 font-medium text-slate-700">{product.name}</span>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${accent.pill}`}>
+                        {product.quantity.toLocaleString("pt-BR")} itens
+                      </span>
+                    </motion.li>
+                  ))}
+                  {!topProducts.length ? (
+                    <li className="rounded-xl bg-white/80 px-3 py-2 text-sm text-slate-500 shadow-sm ring-1 ring-slate-200/60 dark:bg-slate-900/70 dark:text-slate-400 dark:ring-slate-700/60">
+                      Sem produtos destacados no periodo.
+                    </li>
+                  ) : null}
+                </ul>
+              </div>
+            ) : (
+              <div className="rounded-2xl bg-slate-50/90 p-4 text-sm text-slate-600 shadow-inner ring-1 ring-white/60 backdrop-blur-sm dark:bg-slate-900/70 dark:text-slate-300 dark:ring-white/10">
+                Sem movimentacoes para este usuario no periodo selecionado.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}

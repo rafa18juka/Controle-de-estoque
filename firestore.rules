@@ -1,4 +1,4 @@
-﻿rules_version = '2';
+rules_version = '2';
 
 
 
@@ -174,11 +174,67 @@ service cloud.firestore {
 
 
 
-    function areValidTrackingProducts(products) {
+function areValidTrackingProducts(products) {
 
 
 
       return products is list;
+
+
+
+    }
+
+
+
+    function isValidTaskStatusUpdate(resourceData) {
+
+
+
+      let diff = request.resource.data.diff(resourceData);
+
+
+
+      return diff.changedKeys().hasOnly(['status', 'updatedAt', 'completedAt']) &&
+
+
+
+        diff.addedKeys().hasOnly(['completedAt']) &&
+
+
+
+        diff.removedKeys().hasOnly(['completedAt']) &&
+
+
+
+        request.resource.data.status in ['pending', 'completed'] &&
+
+
+
+        request.resource.data.updatedAt == request.time &&
+
+
+
+        request.resource.data.userId == resourceData.userId &&
+
+
+
+        request.resource.data.assignedById == resourceData.assignedById &&
+
+
+
+        request.resource.data.assignedByName == resourceData.assignedByName &&
+
+
+
+        (request.resource.data.status == 'completed'
+
+
+
+          ? request.resource.data.keys().hasAny(['completedAt']) && request.resource.data.completedAt == request.time
+
+
+
+          : !request.resource.data.keys().hasAny(['completedAt']));
 
 
 
@@ -451,6 +507,30 @@ service cloud.firestore {
 
 
 
+    match /taskOptions/{optionId} {
+
+      allow read: if isSignedIn();
+
+      allow create, update, delete: if isAdmin();
+
+    }
+
+
+
+    match /tasks/{taskId} {
+
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isAdmin();
+
+      allow update: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid && isValidTaskStatusUpdate(resource.data));
+
+      allow delete: if isAdmin();
+
+    }
+
+
+
     match /categories/{categoryId} {
 
 
@@ -492,6 +572,7 @@ service cloud.firestore {
 
 
 }
+
 
 
 

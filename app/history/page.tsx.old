@@ -328,7 +328,7 @@ function HistoryContent() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900">
+      <div className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-card">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Historico de movimentos</h1>
@@ -417,7 +417,7 @@ function HistoryContent() {
         )}
       </div>
 
-      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -467,7 +467,7 @@ function HistoryContent() {
                     Quantidade (-) {renderSortIcon("qty")}
                   </button>
                 </th>
-                <th className="px-4 py-3 w-12" aria-sort={ariaSortFor("multiplier")}>
+                <th className="px-4 py-3 w-16" aria-sort={ariaSortFor("multiplier")}>
                   <button
                     type="button"
                     onClick={() => handleSort("multiplier")}
@@ -476,7 +476,7 @@ function HistoryContent() {
                     Multiplicador {renderSortIcon("multiplier")}
                   </button>
                 </th>
-                <th className="px-4 py-3 w-44" aria-sort={ariaSortFor("totalValue")}>
+                <th className="px-4 py-3 w-36" aria-sort={ariaSortFor("totalValue")}>
                   <button
                     type="button"
                     onClick={() => handleSort("totalValue")}
@@ -530,10 +530,8 @@ function HistoryContent() {
                       </td>
                       <td className="px-4 py-3">{movement.productName || "-"}</td>
                       <td className="px-4 py-3 font-semibold text-rose-600">-{Math.abs(movement.qty)}</td>
-                      <td className="px-4 py-3 w-12 whitespace-nowrap">{multiplierDisplay}</td>
-                      <td className="px-4 py-3 w-44 whitespace-nowrap text-right font-semibold text-rose-600">
-                        {formattedValue}
-                      </td>
+                      <td className="px-4 py-3">{multiplierDisplay}</td>
+                      <td className="px-4 py-3 font-semibold text-rose-600">{formattedValue}</td>
                       <td className="px-4 py-3">{movement.userName || movement.userId}</td>
                       <td className="px-4 py-3 text-right">
                         <Button

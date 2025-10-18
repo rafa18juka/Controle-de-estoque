@@ -87,7 +87,7 @@ function AdminDashboard({ summary }: { summary: DashboardSummary }) {
         icon={<CheckCircle2 className="h-4 w-4" />}
         tone="emerald"
       />
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Plataformas ativas</h3>
         <div className="mt-3 space-y-2">
           {summary.topPlatforms.length === 0 ? (
@@ -102,7 +102,7 @@ function AdminDashboard({ summary }: { summary: DashboardSummary }) {
           )}
         </div>
       </div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:col-span-2">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:col-span-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Colaboradores com mais pendencias</h3>
         <div className="mt-3 space-y-2">
           {summary.topUsers.length === 0 ? (
@@ -141,7 +141,7 @@ function SummaryCard({
         ? "bg-amber-50 text-amber-700"
         : "bg-slate-100 text-slate-600";
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium", toneClasses)}>
         {icon}
         {title}
@@ -191,7 +191,7 @@ function PersonalDashboard({ summary }: { summary: PersonalSummary }) {
 
 function ColoredBadge({ label, color }: { label: string; color?: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700">
+    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color ?? "#0F172A" }} />
       {label}
     </span>
@@ -414,7 +414,7 @@ function TaskOptionManager({ type, title, description, icon, options, loading, o
             {options.map((option) => (
               <span
                 key={option.id}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700"
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: option.color }} />
                 {option.name}
@@ -492,7 +492,7 @@ function StaffTasksView({ user }: StaffTasksViewProps) {
 
       <PersonalDashboard summary={summary} />
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Sua fila de tarefas</h2>
@@ -528,7 +528,7 @@ function StaffTasksView({ user }: StaffTasksViewProps) {
               const overdue = isTaskOverdue(task);
               const dueSoon = isTaskDueSoon(task);
               return (
-                <div key={task.id} className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm">
+                <div key={task.id} className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex-1 space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -860,7 +860,7 @@ function AdminTasksView({ user }: AdminTasksViewProps) {
 
       <section className="grid gap-6 lg:grid-cols-[2fr,3fr]">
         <div className="space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Designar nova tarefa</h2>
@@ -978,7 +978,7 @@ function AdminTasksView({ user }: AdminTasksViewProps) {
                   placeholder="Detalhes adicionais para o colaborador"
                   value={assignmentForm.notes}
                   onChange={(event) => handleFormChange("notes", event.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-100"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-slate-700"
                 />
               </div>
 
@@ -998,7 +998,7 @@ function AdminTasksView({ user }: AdminTasksViewProps) {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <h2 className="text-lg font-semibold text-slate-900">Catalogos de tarefas</h2>
             <p className="text-xs text-slate-500">Gerencie os blocos reutilizaveis de tarefas, plataformas e contas.</p>
 
@@ -1035,7 +1035,7 @@ function AdminTasksView({ user }: AdminTasksViewProps) {
         </div>
 
         <div className="space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Fila de tarefas</h2>

@@ -54,7 +54,7 @@ export function BarTimeseries({ data, title, className }: BarTimeseriesProps) {
     const { rawDate, value, quantity } = typed.payload[0].payload;
 
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md dark:border-slate-700 dark:bg-slate-900">
         <p className="text-xs text-slate-500">{formatDay(rawDate)}</p>
         <p className="text-sm font-semibold text-slate-900">{currency(value)}</p>
         {typeof quantity === "number" ? (
@@ -65,7 +65,7 @@ export function BarTimeseries({ data, title, className }: BarTimeseriesProps) {
   };
 
   return (
-    <div className={cn("rounded-2xl bg-white p-6 shadow-sm", className)}>
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900", className)}>
       {title ? (
         <header className="flex items-center justify-between">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h3>

@@ -75,7 +75,7 @@ export function ZPLPreview({
 
   return (
     <div className="grid gap-6 md:grid-cols-2">
-      <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm">
+      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div>
           <h3 className="text-lg font-semibold text-slate-900">Pre-visualizacao</h3>
           <p className="text-sm text-slate-500">
@@ -83,14 +83,14 @@ export function ZPLPreview({
           </p>
         </div>
         <div
-          className="relative rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3"
+          className="relative rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 dark:border-slate-600 dark:bg-slate-900/60"
           style={{ width: totalPreviewWidth, height: previewHeight }}
         >
           <div className="flex h-full" style={{ gap: `${gapPx}px` }}>
             {previewItems.map((item, index) => (
               <div
                 key={index}
-                className="flex h-full flex-col justify-between rounded-md bg-white px-3 py-2 shadow-sm"
+                className="flex h-full flex-col justify-between rounded-md bg-white px-3 py-2 shadow-sm dark:bg-slate-900"
                 style={{ width: `${columnPreviewWidth}px` }}
               >
                 {item ? (
@@ -102,7 +102,7 @@ export function ZPLPreview({
                       {item.name}
                     </div>
                     <div className="flex flex-1 items-center justify-center">
-                      <div className="h-14 w-full rounded-sm border border-slate-200 bg-[repeating-linear-gradient(90deg,#0f172a,#0f172a_2px,transparent_2px,transparent_4px)]" />
+                      <div className="h-14 w-full rounded-sm border border-slate-200 bg-[repeating-linear-gradient(90deg,#0f172a,#0f172a_2px,transparent_2px,transparent_4px)] dark:border-slate-600" />
                     </div>
                     <div className="text-center text-[11px] font-mono tracking-widest text-slate-600">{item.sku}</div>
                   </>
@@ -122,7 +122,7 @@ export function ZPLPreview({
           </Button>
         ) : null}
       </div>
-      <div className="space-y-3 rounded-2xl bg-white p-6 shadow-sm">
+      <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Codigo ZPL</h3>

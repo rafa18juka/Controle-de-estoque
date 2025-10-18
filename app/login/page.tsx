@@ -47,7 +47,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-8 shadow-card">
+    <div className="mx-auto flex w-full max-w-md flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-8 shadow-card dark:border-slate-800 dark:bg-slate-900">
       <div className="space-y-2 text-center">
         <span className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
           Mustafar Variedades
